@@ -54,6 +54,18 @@ int sensors_onewire_list(sensors_ow_dev_t *out, int max, int *found);
 uint32_t sensors_onewire_rescan(void);
 uint32_t sensors_onewire_scan_count(void);
 
+// --- SCD4x (CO2) ---
+// All block until the sensors task has done it (max 10 s); msg gets a human readable result.
+esp_err_t sensors_scd4x_offset_auto(char *msg, size_t len);          // against SHT4x
+esp_err_t sensors_scd4x_offset_set(float c, char *msg, size_t len);
+esp_err_t sensors_scd4x_offset_reset(char *msg, size_t len);        // back to the sensor's EEPROM value
+esp_err_t sensors_scd4x_frc(uint16_t ppm, bool force, char *msg, size_t len);
+esp_err_t sensors_scd4x_set_outdoor(uint16_t ppm);                   // 380..500, NVS
+// "I am in fresh air": waits for stable CO2 (max 30 min), then FRC to the outdoor value.
+esp_err_t sensors_scd4x_fresh_air_start(void);
+// Days since the last FRC; false if never or no SCD4x.
+bool sensors_scd4x_calibration_age(int *days);
+
 // Saves driver state that must survive a reboot (BSEC). Call before a planned restart.
 void sensors_save_state(void);
 

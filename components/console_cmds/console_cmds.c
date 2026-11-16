@@ -198,6 +198,11 @@ static int cmd_set(int argc, char **argv)
         timesync_apply();
         return 0;
     }
+    if (argc == 4 && strcmp(argv[1], "co2") == 0 && strcmp(argv[2], "outdoor") == 0) {
+        esp_err_t err = sensors_scd4x_set_outdoor(atoi(argv[3]));
+        printf("%s\n", err == ESP_OK ? "saved (ASC target follows after reboot)" : "outdoor CO2: 380..500 ppm");
+        return err == ESP_OK ? 0 : 1;
+    }
     if (argc >= 3 && strcmp(argv[1], "ntp") == 0) {
         esp_err_t err = strcmp(argv[2], "dhcp") == 0 ? appcfg_set_ntp(NULL, NULL)
                                                       : appcfg_set_ntp(argv[2], argc >= 4 ? argv[3] : NULL);
@@ -212,7 +217,8 @@ static int cmd_set(int argc, char **argv)
            "  set hostname <name>            DHCP option 12\n"
            "  set tz <posix>                 e.g. UTC0 or CET-1CEST,M3.5.0,M10.5.0/3\n"
            "  set ntp <server> [<server>]    overrides DHCP option 42\n"
-           "  set ntp dhcp                   back to DHCP option 42 / fallback\n");
+           "  set ntp dhcp                   back to DHCP option 42 / fallback\n"
+           "  set co2 outdoor <ppm>          fresh-air target for the SCD41 (default 430)\n");
     return 1;
 }
 
@@ -367,6 +373,39 @@ static int cmd_onewire(int argc, char **argv)
     return 1;
 }
 
+static int cmd_scd41(int argc, char **argv)
+{
+    char msg[128];
+    esp_err_t err;
+    if (argc == 3 && strcmp(argv[1], "offset") == 0 && strcmp(argv[2], "auto") == 0) {
+        err = sensors_scd4x_offset_auto(msg, sizeof(msg));
+    } else if (argc == 3 && strcmp(argv[1], "offset") == 0 && strcmp(argv[2], "reset") == 0) {
+        err = sensors_scd4x_offset_reset(msg, sizeof(msg));
+    } else if (argc == 3 && strcmp(argv[1], "offset") == 0) {
+        err = sensors_scd4x_offset_set(strtof(argv[2], NULL), msg, sizeof(msg));
+    } else if ((argc == 3 || argc == 4) && strcmp(argv[1], "frc") == 0) {
+        int ppm = atoi(argv[2]);
+        if (ppm < 300 || ppm > 2000) {
+            printf("target 300..2000 ppm\n");
+            return 1;
+        }
+        err = sensors_scd4x_frc(ppm, argc == 4 && strcmp(argv[3], "force") == 0, msg, sizeof(msg));
+    } else if (argc == 2 && strcmp(argv[1], "fresh-air") == 0) {
+        err = sensors_scd4x_fresh_air_start();
+        strlcpy(msg, err == ESP_OK ? "started, progress on the display" : esp_err_to_name(err), sizeof(msg));
+    } else {
+        printf("usage:\n"
+               "  scd41 offset auto         temperature offset against the SHT4x (needs 2 min of readings)\n"
+               "  scd41 offset <C>          set the temperature offset\n"
+               "  scd41 offset reset        forget it, use the sensor's EEPROM value\n"
+               "  scd41 frc <ppm> [force]   forced recalibration; refused unless CO2 was stable for 3 min\n"
+               "  scd41 fresh-air           same as a long press on BOOT: FRC to 'set co2 outdoor' once stable\n");
+        return 1;
+    }
+    printf("%s\n", msg);
+    return err == ESP_OK ? 0 : 1;
+}
+
 static int cmd_led(int argc, char **argv)
 {
     if (argc == 2 && (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "off") == 0)) {
@@ -415,6 +454,7 @@ esp_err_t console_cmds_start(void)
         {.command = "i2c", .help = "i2c scan", .func = cmd_i2c},
         {.command = "onewire", .help = "onewire scan|list|name|forget|names|selftest", .func = cmd_onewire},
         {.command = "led", .help = "led on|off", .func = cmd_led},
+        {.command = "scd41", .help = "scd41 offset|frc|fresh-air ...", .func = cmd_scd41},
         {.command = "version", .help = "firmware version", .func = cmd_version},
         {.command = "log", .help = "log on|off", .func = cmd_log},
     };

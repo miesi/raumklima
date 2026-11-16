@@ -48,6 +48,9 @@ GitHub - everything committed must be fit for that (no secrets, no unlicensed th
 
 - Allowed: code with a license compatible with publishing (Bosch BME68x SensorAPI BSD-3,
   Sensirion drivers BSD-3), vendored or via the IDF component manager, license file kept.
+- `third_party/bsec3/` holds Thomas's BSEC3 download: never commit, never copy code from its
+  examples (Bosch license); headers and the library are used from there at build time.
+- Never run a real SCD41 FRC (`scd41 frc`, fresh-air) indoors - it mis-calibrates the sensor.
 - Not allowed in the repo: Elecrow example code (no license), Bosch BSEC binaries (Bosch license),
   GPL code (GxEPD2, Linux drivers) - those were read for facts only.
 - Fonts: `tools/mkfont.py` generates `components/ui/fonts/*.c` from DejaVu (needs Pillow).

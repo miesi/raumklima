@@ -242,7 +242,13 @@ static void page_overview(int page, int count)
     set_text(s_tile_val[3], b);
     // 4 CO2: measured (SCD4x), else BSEC estimate
     if (metrics_get_primary("co2_ppm", &m)) {
-        set_text(s_tile_cap[4], "CO2");
+        int days;
+        if (sensors_scd4x_calibration_age(&days)) {
+            snprintf(b, sizeof(b), "CO2 (calibrated %d d ago)", days);
+        } else {
+            strlcpy(b, "CO2 (not calibrated)", sizeof(b));
+        }
+        set_text(s_tile_cap[4], b);
         snprintf(b, sizeof(b), "%.0f ppm", m.value);
     } else if (metrics_get_primary("co2eq_ppm", &m)) {
         set_text(s_tile_cap[4], "CO2 equivalent (BSEC estimate)");
@@ -576,7 +582,10 @@ static void handle_key(const app_key_event_t *k)
         s_force_full = true;   // manual "clean the screen"
         break;
     case APP_KEY_BOOT:
-        break;                 // reserved (later: fresh-air calibration on long press)
+        if (k->long_press) {
+            sensors_scd4x_fresh_air_start();   // "I am in fresh air"
+        }
+        break;
     }
     ESP_LOGI(TAG, "key %d%s, page %d/%d", k->key, k->long_press ? " (long)" : "", s_page + 1, count);
 }

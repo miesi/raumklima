@@ -31,7 +31,7 @@ struct sensor_inst {
     char name[16];
     char model[24];
     char info[48];
-    char warn[48];         // non-empty = problem to show on the overview
+    char warn[80];         // non-empty = problem to show on the overview
     bool supported;
     void *ctx;
     int64_t next_us;
@@ -50,7 +50,7 @@ void sensor_publish_as(const char *instance, const char *quantity, float value);
 void sensors_kick(sensor_inst_t *s);
 
 extern const sensor_driver_t sensor_drv_bh1750;
-extern const sensor_driver_t sensor_drv_bme68x;
+extern const sensor_driver_t sensor_drv_bme68x;   // bme68x_bsec.c
 extern const sensor_driver_t sensor_drv_ds2484;
 extern const sensor_driver_t sensor_drv_bme69x;
 extern const sensor_driver_t sensor_drv_sht4x;

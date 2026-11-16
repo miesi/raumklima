@@ -138,7 +138,11 @@ has two controllers).
   reachable). Tested 2026-11-16 with 2 DS18B20: search, conversion, CRC ok.
 - SHT4x and SCD4x drivers follow Sensirion's embedded-i2c-sht4x / -scd4x (BSD-3) command
   tables; BME690 uses Bosch's BME690_SensorAPI. All tested 2026-11-16 on the CrowPanel.
-  BME690 IAQ needs BSEC3 (Bosch click-through download), not integrated.
+  BME690 IAQ with BSEC3 3.3.0.1 from third_party/bsec3 (git-ignored), tested 2026-11-17.
+  BSEC2 and BSEC3 export the same symbols: one per build; BSEC3 if present, else BSEC2.
+- SCD41: pressure compensation, offset auto against SHT4x (tested: 4.00 -> 4.89 C, then
+  reset), FRC with 3 min / 40 ppm stability check (refusal tested; a real FRC was NOT run
+  indoors on purpose), fresh-air session on BOOT long press, ASC target = outdoor value.
 
 ### Networking
 
