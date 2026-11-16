@@ -1,4 +1,4 @@
-// Bosch BME680 / BME688 / BME690 detection; BME680 runs with BSEC2 (IAQ), BME688 raw.
+// Bosch BME680 (BSEC2, IAQ) and BME688 (raw). BME690 is left to drivers/bme69x.c.
 // Chip ID 0xD0 = 0x61 for all three; variant ID 0xF0: 0x00 BME680, 0x01 BME688, 0x02 BME690
 // (BME690_SensorAPI bme69x_defs.h, BME68x_SensorAPI bme68x_defs.h).
 #include <stdio.h>
@@ -199,10 +199,7 @@ static esp_err_t probe(sensor_inst_t *s)
              model[3], model[4], model[5]);   // "bme680"
 
     if (variant == VARIANT_BME690) {
-        // different compensation and BSEC; needs the BME690 SensorAPI - not built in yet
-        s->supported = false;
-        strlcpy(s->info, "detected, no driver yet", sizeof(s->info));
-        return ESP_OK;
+        return ESP_ERR_NOT_FOUND;   // handled by drivers/bme69x.c (own SensorAPI)
     }
     if (variant != VARIANT_BME680 && variant != VARIANT_BME688) {
         s->supported = false;

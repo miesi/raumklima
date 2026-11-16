@@ -195,31 +195,48 @@ static void page_overview(int page, int count)
     }
     set_text(s_ntp, b);
 
-    static const struct {
-        const char *cap, *quantity, *fmt;
-    } tiles[6] = {
-        {"Temperature", "temperature_c", "%.1f \xc2\xb0" "C"},
-        {"Humidity", "humidity_pct", "%.0f %%"},
-        {"Pressure", "pressure_hpa", "%.0f hPa"},
-        {"IAQ", "iaq", "%.0f"},
-        {"CO2 equivalent (BSEC estimate)", "co2eq_ppm", "%.0f ppm"},
-        {"Light", "illuminance_lx", "%.0f lx"},
-    };
-    for (int i = 0; i < 6; i++) {
-        if (strcmp(tiles[i].quantity, "iaq") == 0) {
-            metric_t acc;
-            if (metrics_get_primary("iaq_accuracy", &acc)) {
-                snprintf(b, sizeof(b), "IAQ (accuracy %.0f of 3)", acc.value);
-            } else {
-                strlcpy(b, "IAQ", sizeof(b));
-            }
-            set_text(s_tile_cap[i], b);
-        } else {
-            set_text(s_tile_cap[i], tiles[i].cap);
-        }
-        fmt_metric(b, sizeof(b), tiles[i].quantity, tiles[i].fmt);
-        set_text(s_tile_val[i], b);
+    // tiles: value from the best sensor for the quantity, with fallbacks
+    metric_t m;
+    // 0 temperature, 1 humidity, 2 pressure
+    set_text(s_tile_cap[0], "Temperature");
+    fmt_metric(b, sizeof(b), "temperature_c", "%.1f \xc2\xb0" "C");
+    set_text(s_tile_val[0], b);
+    set_text(s_tile_cap[1], "Humidity");
+    fmt_metric(b, sizeof(b), "humidity_pct", "%.0f %%");
+    set_text(s_tile_val[1], b);
+    set_text(s_tile_cap[2], "Pressure");
+    fmt_metric(b, sizeof(b), "pressure_hpa", "%.0f hPa");
+    set_text(s_tile_val[2], b);
+    // 3 air quality: BSEC IAQ, else raw gas resistance
+    if (metrics_get_primary("iaq", &m)) {
+        metric_t acc;
+        bool has_acc = metrics_get_primary("iaq_accuracy", &acc);
+        snprintf(b, sizeof(b), "IAQ (accuracy %.0f of 3)", has_acc ? acc.value : 0.0f);
+        set_text(s_tile_cap[3], b);
+        snprintf(b, sizeof(b), "%.0f", m.value);
+    } else if (metrics_get_primary("gas_ohm", &m)) {
+        set_text(s_tile_cap[3], "Gas resistance (no IAQ)");
+        snprintf(b, sizeof(b), "%.0f kOhm", m.value / 1000.0f);
+    } else {
+        set_text(s_tile_cap[3], "IAQ");
+        strlcpy(b, "--", sizeof(b));
     }
+    set_text(s_tile_val[3], b);
+    // 4 CO2: measured (SCD4x), else BSEC estimate
+    if (metrics_get_primary("co2_ppm", &m)) {
+        set_text(s_tile_cap[4], "CO2");
+        snprintf(b, sizeof(b), "%.0f ppm", m.value);
+    } else if (metrics_get_primary("co2eq_ppm", &m)) {
+        set_text(s_tile_cap[4], "CO2 equivalent (BSEC estimate)");
+        snprintf(b, sizeof(b), "%.0f ppm", m.value);
+    } else {
+        set_text(s_tile_cap[4], "CO2");
+        strlcpy(b, "--", sizeof(b));
+    }
+    set_text(s_tile_val[4], b);
+    set_text(s_tile_cap[5], "Light");
+    fmt_metric(b, sizeof(b), "illuminance_lx", "%.0f lx");
+    set_text(s_tile_val[5], b);
 
     netmgr_status_t n;
     netmgr_get_status(&n);

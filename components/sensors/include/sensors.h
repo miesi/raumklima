@@ -42,7 +42,7 @@ void sensors_warnings(char *buf, size_t len);
 // --- 1-Wire (DS2484) ---
 typedef struct {
     uint64_t rom;
-    char name[OW_NAME_LEN];
+    char name[OW_INSTANCE_LEN];
     float temp_c;
     bool valid;
     uint32_t crc_errors;

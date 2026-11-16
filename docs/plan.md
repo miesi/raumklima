@@ -135,7 +135,10 @@ has two controllers).
 - `onewire selftest [n]` runs the search on a simulated bus with n devices and checks CRC-8
   against the Maxim AN27 example ROM. Tested 2026-11-16 with n = 0, 3, 8, 9, 40: PASS.
 - DS2484 driver: command set from the Linux ds2482 driver (Analog Devices datasheets were not
-  reachable). NOT yet tested on hardware - ASSUMPTION until a DS2484 is connected.
+  reachable). Tested 2026-11-16 with 2 DS18B20: search, conversion, CRC ok.
+- SHT4x and SCD4x drivers follow Sensirion's embedded-i2c-sht4x / -scd4x (BSD-3) command
+  tables; BME690 uses Bosch's BME690_SensorAPI. All tested 2026-11-16 on the CrowPanel.
+  BME690 IAQ needs BSEC3 (Bosch click-through download), not integrated.
 
 ### Networking
 

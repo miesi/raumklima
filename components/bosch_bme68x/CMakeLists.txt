@@ -1,4 +1,4 @@
-# Bosch BME68x SensorAPI (BSD-3-Clause) and BSEC2 (closed binary, Bosch license).
+# Bosch BME68x and BME690 SensorAPI (BSD-3-Clause) and BSEC2 (closed binary, Bosch license).
 # Neither is committed to this repo. Both are downloaded at configure time from Bosch's
 # GitHub repositories, pinned to a commit and checked against SHA256.
 #
@@ -6,8 +6,10 @@
 # https://www.bosch-sensortec.com/media/boschsensortec/downloads/software/bme688_development_software/2024_12/20241219_clickthrough_license_terms_bsec_bme680_bme688_bme690.pdf
 
 set(bme68x_rev "80ea120a8b8ac987d7d79eb68a9ed796736be845")   # BME68x_SensorAPI, 2023-05-17 (v4.4.8)
+set(bme69x_rev "8a4d9229aaa26c960ca8f7717cb93087f067ecbe")   # BME690_SensorAPI, 2026-02-20
 set(bsec2_rev  "4f559a6aa450f0ce436e602b42dc384f52128c66")   # Bosch-BSEC2-Library, 2026-07-08 (1.10.2610)
 set(bme68x_url "https://raw.githubusercontent.com/boschsensortec/BME68x_SensorAPI/${bme68x_rev}")
+set(bme69x_url "https://raw.githubusercontent.com/boschsensortec/BME690_SensorAPI/${bme69x_rev}")
 set(bsec2_url  "https://raw.githubusercontent.com/boschsensortec/Bosch-BSEC2-Library/${bsec2_rev}")
 # 3.3 V supply, 3 s sample rate (LP), 4 days calibration history
 set(bsec2_cfg  "src/config/bme680/bme680_iaq_33v_3s_4d/bsec_iaq.txt")
@@ -33,14 +35,18 @@ fetch("${bme68x_url}/bme68x.c"       "${dl}/bme68x/bme68x.c"       bad525ea57fe5
 fetch("${bme68x_url}/bme68x.h"       "${dl}/bme68x/bme68x.h"       09ed6babf92955ced360790958e2e2f03efb85bc4f0a8a864a4151a905eaf0ca)
 fetch("${bme68x_url}/bme68x_defs.h"  "${dl}/bme68x/bme68x_defs.h"  5f59c0bafbcc416c091a1a1cc40bb7362f0b48ea02ac7fa5197813f491de01aa)
 fetch("${bme68x_url}/LICENSE"        "${dl}/bme68x/LICENSE"        56df116398e0b72a12ae353d93002d29175583590283ced2c2510e3d8075546f)
+fetch("${bme69x_url}/bme69x.c"       "${dl}/bme69x/bme69x.c"       c079186889087f97b04bf4a7cbceb9366b1ba6e1fa5a2818a24196717fc46faf)
+fetch("${bme69x_url}/bme69x.h"       "${dl}/bme69x/bme69x.h"       f8decb821d5bcfd4877e6bfe1e6ff94980055aa6b28aef5a81d8e288cbdb1e60)
+fetch("${bme69x_url}/bme69x_defs.h"  "${dl}/bme69x/bme69x_defs.h"  8e0ed7bf0b1f91a5e16012daf99676d1a6ea2d88e6dbd7825be1ae3c45772d49)
+fetch("${bme69x_url}/LICENSE"        "${dl}/bme69x/LICENSE"        179c8853c3312def03362077b40d2beeb2f951730622e64987c4d5eef243fef4)
 fetch("${bsec2_url}/src/esp32s3/libalgobsec.a" "${dl}/bsec2/libalgobsec.a" 3ed07f5e0bdcb6832de72ff6c6e7ba2b7dcd3ccaa85fd659bce718568d1a34e6)
 fetch("${bsec2_url}/src/inc/bsec_datatypes.h"  "${dl}/bsec2/bsec_datatypes.h" a632c78ca4e38ad7773fe3493ecb2ff2054a0a5eec429c091db9bfe7ed55f927)
 fetch("${bsec2_url}/src/inc/bsec_interface.h"  "${dl}/bsec2/bsec_interface.h" 7643d4dbc0958c9403d5477eb73f9453e54cf69d3ba99cab1c877a0cd4570ae1)
 fetch("${bsec2_url}/${bsec2_cfg}"              "${dl}/bsec2/bsec_iaq.txt"     adf1509b0d07d2eec90d46ac698205de32d899855d95fa054bd2a5464910de6a)
 fetch("${bsec2_url}/LICENSE.md"                "${dl}/bsec2/LICENSE.md"       a27fd42924746a4b45808c21dc71f7c0e6006b4ce9f933d2301e154ed4255d76)
 
-idf_component_register(SRCS "${dl}/bme68x/bme68x.c"
-                       INCLUDE_DIRS "${dl}/bme68x" "${dl}/bsec2")
+idf_component_register(SRCS "${dl}/bme68x/bme68x.c" "${dl}/bme69x/bme69x.c"
+                       INCLUDE_DIRS "${dl}/bme68x" "${dl}/bme69x" "${dl}/bsec2")
 
 add_prebuilt_library(algobsec "${dl}/bsec2/libalgobsec.a")
 target_link_libraries(${COMPONENT_LIB} INTERFACE algobsec)

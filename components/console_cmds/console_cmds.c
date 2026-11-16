@@ -283,7 +283,7 @@ static void ow_print(void)
     for (int i = 0; i < n; i++) {
         char rom[OW_ROM_STR_LEN];
         ow_rom_str(d[i].rom, rom);
-        printf("  %d %s %-15s ", i + 1, rom, d[i].name);
+        printf("  %d %s %-19s ", i + 1, rom, d[i].name);
         if (ow_family(d[i].rom) != OW_FAMILY_DS18B20) {
             printf("family 0x%02x, not read\n", ow_family(d[i].rom));
         } else if (d[i].valid) {

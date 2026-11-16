@@ -11,12 +11,13 @@ Status: early, runs on the CrowPanel 5.79. See [docs/plan.md](docs/plan.md).
 - Elecrow CrowPanel ESP32 E-Paper HMI 5.79" (DIS08792E): ESP32-S3, 8 MB flash, 8 MB PSRAM,
   792 x 272 b/w e-paper (2x SSD1683), USB-C via CH340C to UART0.
   Pin map and sources: [docs/hardware-crowpanel-579.md](docs/hardware-crowpanel-579.md)
-- Sensors on I2C (SDA = GPIO3, SCL = GPIO8, header U5):
-  - BME680 - temperature, humidity, pressure, gas resistance
+- Sensors on I2C (SDA = GPIO3, SCL = GPIO8, header U5), all tested on the CrowPanel:
+  - SHT4x (SHT45) - reference temperature and humidity (preferred source for both)
+  - SCD4x (SCD41) - CO2, with pressure compensation from the BME6xx
+  - BME690 - temperature, humidity, pressure, gas resistance (no IAQ yet: needs BSEC3)
+  - BME680 - as above plus IAQ via BSEC2
   - BH1750 - illuminance
-
-Implemented, not yet tested on hardware: DS2484 I2C-to-1-Wire bridge with up to 8 DS18B20.
-Planned: SCD41 (CO2), SHT40/SHT45 (reference temperature/humidity), BME690 (IAQ via BSEC).
+  - DS2484 I2C-to-1-Wire bridge with up to 8 DS18B20 probes
 
 BME680 IAQ uses Bosch BSEC2, downloaded at build time (closed binary, Bosch license - not
 in this repo). Building with it means accepting Bosch's BSEC license terms.

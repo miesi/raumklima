@@ -51,7 +51,7 @@ static const uint8_t k_addrs[] = {0x18};
 
 typedef struct {
     uint64_t rom;
-    char name[OW_NAME_LEN];
+    char name[OW_INSTANCE_LEN];
     float temp_c;
     bool valid;
     uint32_t crc_errors;
@@ -298,11 +298,11 @@ static void detail(sensor_inst_t *s, char *buf, size_t len)
         char rom[OW_ROM_STR_LEN];
         ow_rom_str(p->rom, rom);
         if (ow_family(p->rom) != OW_FAMILY_DS18B20) {
-            o += snprintf(buf + o, len - o, "%-15s  family %02x\n", p->name, ow_family(p->rom));
+            o += snprintf(buf + o, len - o, "%-19s family %02x\n", p->name, ow_family(p->rom));
         } else if (p->valid) {
-            o += snprintf(buf + o, len - o, "%-15s %6.2f \xc2\xb0" "C\n", p->name, p->temp_c);
+            o += snprintf(buf + o, len - o, "%-19s %6.2f \xc2\xb0" "C\n", p->name, p->temp_c);
         } else {
-            o += snprintf(buf + o, len - o, "%-15s     --\n", p->name);
+            o += snprintf(buf + o, len - o, "%-19s     --\n", p->name);
         }
     }
     if (c->n == 0 && o < len) {

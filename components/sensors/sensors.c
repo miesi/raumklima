@@ -18,6 +18,9 @@ static const char *TAG = "sensors";
 // Registry. Order matters only if two drivers share an address.
 static const sensor_driver_t *const k_drivers[] = {
     &sensor_drv_bme68x,
+    &sensor_drv_bme69x,
+    &sensor_drv_sht4x,
+    &sensor_drv_scd4x,
     &sensor_drv_bh1750,
     &sensor_drv_ds2484,
 };
@@ -58,6 +61,19 @@ void sensor_publish_as(const char *instance, const char *quantity, float value)
     char key[METRIC_KEY_LEN];
     snprintf(key, sizeof(key), "%s.%s", instance, quantity);
     metrics_publish(key, value);
+}
+
+uint8_t sensirion_crc8(const uint8_t *data, size_t len)
+{
+    // Sensirion: polynomial 0x31, init 0xFF (embedded-i2c-* sensirion_i2c.h)
+    uint8_t crc = 0xFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int b = 0; b < 8; b++) {
+            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x31) : (uint8_t)(crc << 1);
+        }
+    }
+    return crc;
 }
 
 void sensors_kick(sensor_inst_t *s)

@@ -21,6 +21,7 @@ extern "C" {
 #define OW_NAME_LEN      16     // incl. NUL: max 15 chars [a-z0-9_]
 #define OW_NAMES_MAX     16     // stored names; more than devices, so spare probes keep theirs
 #define OW_ROM_STR_LEN   17
+#define OW_INSTANCE_LEN  24     // fits "ow_" + 16 hex digits for unnamed devices
 
 // ROM commands
 #define OW_CMD_SEARCH_ROM  0xF0

@@ -52,3 +52,9 @@ void sensors_kick(sensor_inst_t *s);
 extern const sensor_driver_t sensor_drv_bh1750;
 extern const sensor_driver_t sensor_drv_bme68x;
 extern const sensor_driver_t sensor_drv_ds2484;
+extern const sensor_driver_t sensor_drv_bme69x;
+extern const sensor_driver_t sensor_drv_sht4x;
+extern const sensor_driver_t sensor_drv_scd4x;
+
+// Sensirion CRC-8 (poly 0x31, init 0xFF) over one 16-bit word
+uint8_t sensirion_crc8(const uint8_t *data, size_t len);
