@@ -19,7 +19,7 @@ extern "C" {
 #define BOARD_EPD_DC_GPIO     GPIO_NUM_46
 #define BOARD_EPD_RST_GPIO    GPIO_NUM_47
 #define BOARD_EPD_BUSY_GPIO   GPIO_NUM_48   // high = busy
-#define BOARD_LED_GPIO        GPIO_NUM_41   // power LED
+#define BOARD_LED_GPIO        GPIO_NUM_41   // red LED D1 via R16, high = on (no controller)
 #define BOARD_SD_PWR_GPIO     GPIO_NUM_42   // microSD power rail, unused
 #define BOARD_KEY_MENU_GPIO   GPIO_NUM_2    // all keys active low, pull-ups on board
 #define BOARD_KEY_EXIT_GPIO   GPIO_NUM_1

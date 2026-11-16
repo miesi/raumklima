@@ -367,6 +367,16 @@ static int cmd_onewire(int argc, char **argv)
     return 1;
 }
 
+static int cmd_led(int argc, char **argv)
+{
+    if (argc == 2 && (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "off") == 0)) {
+        board_led_set(strcmp(argv[1], "on") == 0);
+        return 0;
+    }
+    printf("usage: led on|off   (red LED D1 on GPIO41, off after boot)\n");
+    return 1;
+}
+
 static int cmd_version(int argc, char **argv)
 {
     const esp_app_desc_t *app = esp_app_get_description();
@@ -404,6 +414,7 @@ esp_err_t console_cmds_start(void)
         {.command = "factory-reset", .help = "erase all settings: factory-reset yes", .func = cmd_factory_reset},
         {.command = "i2c", .help = "i2c scan", .func = cmd_i2c},
         {.command = "onewire", .help = "onewire scan|list|name|forget|names|selftest", .func = cmd_onewire},
+        {.command = "led", .help = "led on|off", .func = cmd_led},
         {.command = "version", .help = "firmware version", .func = cmd_version},
         {.command = "log", .help = "log on|off", .func = cmd_log},
     };

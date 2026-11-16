@@ -38,7 +38,7 @@ void board_init(void)
     gpio_config(&out);
     gpio_set_level(BOARD_SD_PWR_GPIO, 0);   // microSD not used
     gpio_set_level(BOARD_EPD_PWR_GPIO, 1);  // panel power on, the EPD driver handles sleep
-    gpio_set_level(BOARD_LED_GPIO, 1);
+    gpio_set_level(BOARD_LED_GPIO, 0);   // red LED D1: off by default, 'led on|off' on the console
     probe_pullups();
 }
 

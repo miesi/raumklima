@@ -20,6 +20,9 @@ sdkconfig.secrets
 nvs_*.bin
 nvs_*.csv
 
+# --- Bosch BSEC3: click-through license, each developer downloads it (see README) ---
+third_party/bsec3/
+
 # --- debugging artefacts ---
 *.elf.dump
 coredump*.bin

@@ -43,7 +43,6 @@ static const char *TAG = "ui";
 
 #define UI_FULL_EVERY     30      // partial refreshes between two full refreshes
 #define UI_EVENT_SETTLE_MS 1500   // coalesce bursts of network events
-#define IP6_SHOWN_MAX     2       // overview: at most 2 IPv6 addresses, "+" if more
 
 typedef enum { MSG_KEY, MSG_REDRAW } msg_type_t;
 typedef struct {
@@ -77,7 +76,9 @@ static int page_count(void)
 static lv_obj_t *s_overview, *s_detail;
 static lv_obj_t *s_clock, *s_date, *s_ntp;
 static lv_obj_t *s_tile_cap[6], *s_tile_val[6];
-static lv_obj_t *s_net[4], *s_uptime, *s_warn, *s_pageno;
+static lv_obj_t *s_uptime, *s_warn, *s_pageno;
+static lv_obj_t *s_ow_cap[OW_MAX_DEVICES], *s_ow_val[OW_MAX_DEVICES];
+static lv_obj_t *s_overlay, *s_ovl_text;
 static lv_obj_t *s_title, *s_col[2], *s_pageno2;
 
 static lv_obj_t *mk_label(lv_obj_t *parent, const lv_font_t *font, int x, int y)
@@ -131,14 +132,17 @@ static void build_screen(void)
     lv_obj_set_pos(rule, 10, 160);
     lv_obj_set_style_bg_color(rule, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
-    for (int i = 0; i < 4; i++) {
-        s_net[i] = mk_label(s_overview, &font_dejavu_18, 14, 166 + i * 25);
+    s_uptime = mk_label(s_overview, &font_dejavu_14, 14, 140);
+    s_warn = mk_label(s_overview, &font_dejavu_14, 14, 165);
+    lv_obj_set_width(s_warn, 715);
+    lv_label_set_long_mode(s_warn, LV_LABEL_LONG_MODE_CLIP);
+    s_pageno = mk_label(s_overview, &font_dejavu_14, 740, 165);
+    for (int i = 0; i < OW_MAX_DEVICES; i++) {
+        int x = 14 + (i % 4) * 195;
+        int y = 186 + (i / 4) * 43;
+        s_ow_cap[i] = mk_label(s_overview, &font_dejavu_14, x, y);
+        s_ow_val[i] = mk_label(s_overview, &font_dejavu_bold_24, x, y + 14);
     }
-    s_uptime = mk_label(s_overview, &font_dejavu_18, 560, 191);
-    s_warn = mk_label(s_overview, &font_dejavu_14, 560, 218);
-    lv_obj_set_width(s_warn, 225);
-    lv_label_set_long_mode(s_warn, LV_LABEL_LONG_MODE_WRAP);
-    s_pageno = mk_label(s_overview, &font_dejavu_14, 740, 254);
 
     // detail pages: title + two text columns
     s_detail = mk_container(scr);
@@ -147,6 +151,20 @@ static void build_screen(void)
     s_col[1] = mk_label(s_detail, &font_dejavu_18, 410, 40);
     s_pageno2 = mk_label(s_detail, &font_dejavu_14, 740, 254);
     lv_obj_set_hidden(s_detail, true);
+
+    // network-down overlay, above both pages
+    s_overlay = lv_obj_create(scr);
+    lv_obj_remove_style_all(s_overlay);
+    lv_obj_set_size(s_overlay, 560, 96);
+    lv_obj_set_pos(s_overlay, (EPD_WIDTH - 560) / 2, (EPD_HEIGHT - 96) / 2);
+    lv_obj_set_style_bg_color(s_overlay, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_overlay, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_overlay, 4, 0);
+    lv_obj_t *t = mk_label(s_overlay, &font_dejavu_bold_24, 16, 8);
+    lv_label_set_text(t, "NETWORK DOWN");
+    s_ovl_text = mk_label(s_overlay, &font_dejavu_18, 16, 40);
+    lv_obj_set_hidden(s_overlay, true);
 }
 
 // --- formatting helpers ---
@@ -238,46 +256,81 @@ static void page_overview(int page, int count)
     fmt_metric(b, sizeof(b), "illuminance_lx", "%.0f lx");
     set_text(s_tile_val[5], b);
 
-    netmgr_status_t n;
-    netmgr_get_status(&n);
-    if (n.associated) {
-        snprintf(b, sizeof(b), "WLAN connected: %s, %d dBm", n.ssid, n.rssi);
-    } else {
-        snprintf(b, sizeof(b), "WLAN NOT connected (%s)", n.ssid[0] ? n.ssid : "not configured");
-    }
-    set_text(s_net[0], b);
-    if (n.has_ip4) {
-        snprintf(b, sizeof(b), "IPv4 " IPSTR, IP2STR(&n.ip4.ip));
-    } else {
-        strlcpy(b, "IPv4 -", sizeof(b));
-    }
-    set_text(s_net[1], b);
-    for (int i = 0; i < IP6_SHOWN_MAX; i++) {
-        b[0] = '\0';
-        if (i < n.n_ip6) {
-            char a[48];
-            netmgr_ip6_str(&n.ip6[i], a, sizeof(a));
-            snprintf(b, sizeof(b), "%s %s%s", i == 0 ? "IPv6" : "        ", a,
-                     (i == IP6_SHOWN_MAX - 1 && n.n_ip6 > IP6_SHOWN_MAX) ? " +" : "");
-        } else if (i == 0) {
-            strlcpy(b, "IPv6 -", sizeof(b));
-        }
-        set_text(s_net[2 + i], b);
-    }
     char up[24];
     console_fmt_uptime(up, sizeof(up), esp_timer_get_time(), false);
     snprintf(b, sizeof(b), "Uptime %s", up);
     set_text(s_uptime, b);
-    char w[80];
+
+    // alert line: sensor limits, fresh-air hint, calibration progress
+    char w[160];
     sensors_warnings(w, sizeof(w));
     if (w[0]) {
-        snprintf(b, sizeof(b), "! %s", w);
-        set_text(s_warn, b);
+        char a[sizeof(w) + 4];
+        snprintf(a, sizeof(a), "! %s", w);
+        set_text(s_warn, a);
     } else {
         set_text(s_warn, "");
     }
+
+    // 1-Wire probes: up to OW_MAX_DEVICES tiles, 4 per row
+    sensors_ow_dev_t ow[OW_MAX_DEVICES];
+    int found = 0;
+    int n_ow = sensors_onewire_list(ow, OW_MAX_DEVICES, &found);
+    for (int i = 0; i < OW_MAX_DEVICES; i++) {
+        if (i < n_ow) {
+            set_text(s_ow_cap[i], ow[i].name);
+            if (ow_family(ow[i].rom) != OW_FAMILY_DS18B20) {
+                strlcpy(b, "?", sizeof(b));
+            } else if (ow[i].valid) {
+                snprintf(b, sizeof(b), "%.1f \xc2\xb0" "C", ow[i].temp_c);
+            } else {
+                strlcpy(b, "--", sizeof(b));
+            }
+            set_text(s_ow_val[i], b);
+        } else {
+            set_text(s_ow_cap[i], "");
+            set_text(s_ow_val[i], "");
+        }
+    }
     snprintf(b, sizeof(b), "%d/%d", page + 1, count);
     set_text(s_pageno, b);
+}
+
+// Network-down overlay on every page except the network page. Shown once the network has
+// been down (no WLAN or no IPv4) for NET_DOWN_GRACE_US, so a normal boot does not flash it.
+#define NET_DOWN_GRACE_US (20LL * 1000 * 1000)
+static int64_t s_net_down_since = 1;   // 1 = "since boot"
+
+static void update_overlay(void)
+{
+    netmgr_status_t n;
+    netmgr_get_status(&n);
+    int64_t now = esp_timer_get_time();
+    bool up = n.associated && n.has_ip4;
+    if (up) {
+        s_net_down_since = 0;
+    } else if (s_net_down_since == 0) {
+        s_net_down_since = now;
+    }
+    bool show = !up && s_page != PAGE_NETWORK && now - s_net_down_since > NET_DOWN_GRACE_US;
+    if (show) {
+        char b[96];
+        if (!n.ssid[0]) {
+            strlcpy(b, "WLAN not configured - 'set wifi' on the console", sizeof(b));
+        } else if (!n.associated) {
+            snprintf(b, sizeof(b), "WLAN '%s' not connected", n.ssid);
+        } else {
+            snprintf(b, sizeof(b), "WLAN '%s' up, no IPv4 address (DHCP)", n.ssid);
+        }
+        char d[32];
+        console_fmt_uptime(d, sizeof(d), now - s_net_down_since, false);
+        char line[160];
+        snprintf(line, sizeof(line), "%s\ndown for %s", b, d);
+        set_text(s_ovl_text, line);
+    }
+    if (lv_obj_is_hidden(s_overlay) == show) {
+        lv_obj_set_hidden(s_overlay, !show);
+    }
 }
 
 static void page_network(char *c0, size_t l0, char *c1, size_t l1)
@@ -423,8 +476,11 @@ static void page_system(char *c0, size_t l0, char *c1, size_t l1)
     }
 }
 
+static void update_overlay(void);
+
 static void update_page(void)
 {
+    update_overlay();
     int count = page_count();
     if (s_page >= count) {
         s_page = 0;

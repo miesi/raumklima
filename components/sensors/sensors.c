@@ -225,7 +225,7 @@ void sensors_warnings(char *buf, size_t len)
 {
     buf[0] = '\0';
     if (s_dropped) {
-        snprintf(buf, len, "%d sensor(s) over limit %d", s_dropped, MAX_INST);
+        snprintf(buf, len, "%d sensor(s) over limit %d: %s", s_dropped, MAX_INST, s_dropped_addrs);
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     for (int i = 0; i < s_n; i++) {
