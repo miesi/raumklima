@@ -3,14 +3,17 @@
 #include "appcfg.h"
 #include "board.h"
 #include "console_cmds.h"
+#include "epd.h"
 #include "esp_app_desc.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "i2cbus.h"
 #include "metrics.h"
 #include "netmgr.h"
+#include "onewire.h"
 #include "sensors.h"
 #include "timesync.h"
+#include "ui.h"
 
 static const char *TAG = "main";
 
@@ -22,12 +25,19 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(appcfg_init());     // NVS
     metrics_init();
+    ow_names_init();                    // 1-Wire probe names from NVS
 
     ESP_ERROR_CHECK(i2cbus_init());
     sensors_start();
 
     ESP_ERROR_CHECK(netmgr_start());
     timesync_start();
+
+    if (epd_init() == ESP_OK) {
+        ui_start();
+    } else {
+        ESP_LOGE(TAG, "e-paper init failed, running without display");
+    }
 
     board_keys_start();
     console_cmds_start();

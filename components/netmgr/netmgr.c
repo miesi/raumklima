@@ -10,6 +10,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "lwip/ip6_addr.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "netmgr";
@@ -213,4 +214,14 @@ void netmgr_get_status(netmgr_status_t *out)
 esp_netif_t *netmgr_netif(void)
 {
     return s_netif;
+}
+
+void netmgr_ip6_str(const esp_ip6_addr_t *a, char *buf, size_t len)
+{
+    ip6_addr_t ip;
+    memcpy(ip.addr, a->addr, sizeof(ip.addr));
+#if LWIP_IPV6_SCOPES
+    ip.zone = 0;
+#endif
+    ip6addr_ntoa_r(&ip, buf, (int)len);
 }

@@ -1,0 +1,9 @@
+menu "Sensors"
+    config HUB_SENSORS_MAX
+        int "Maximum number of I2C sensor instances"
+        default 8
+        range 1 16
+        help
+            More sensors found than this: error message, the first ones found are used.
+            Set it to 1 to test the overflow handling with two sensors.
+endmenu

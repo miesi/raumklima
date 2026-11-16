@@ -4,7 +4,7 @@ ESP-IDF firmware for a room climate sensor hub: ESP32-S3, I2C sensors, e-paper s
 display, network time, serial console. One firmware for all boards and sensor sets; every
 device-specific value is set on the console and stored in NVS.
 
-Status: planning. See [docs/plan.md](docs/plan.md).
+Status: early, runs on the CrowPanel 5.79. See [docs/plan.md](docs/plan.md).
 
 ## Hardware (first target)
 
@@ -15,8 +15,11 @@ Status: planning. See [docs/plan.md](docs/plan.md).
   - BME680 - temperature, humidity, pressure, gas resistance
   - BH1750 - illuminance
 
-Planned: SCD41 (CO2), SHT40/SHT45 (reference temperature/humidity), BME690 (IAQ via BSEC),
-DS2484 I2C-to-1-Wire bridge with DS18B20 probes.
+Implemented, not yet tested on hardware: DS2484 I2C-to-1-Wire bridge with up to 8 DS18B20.
+Planned: SCD41 (CO2), SHT40/SHT45 (reference temperature/humidity), BME690 (IAQ via BSEC).
+
+BME680 IAQ uses Bosch BSEC2, downloaded at build time (closed binary, Bosch license - not
+in this repo). Building with it means accepting Bosch's BSEC license terms.
 
 ## Build
 
@@ -31,6 +34,17 @@ idf.py -p /dev/cu.usbserial-10 flash monitor
 
 On macOS the CH340C shows up as `/dev/cu.usbserial-*`. Exit the monitor with `Ctrl-]`.
 
+## WLAN at build time (optional)
+
+Create `wlan.config` in the repo root (git-ignored) and run `idf.py reconfigure`:
+
+```
+ssid=<ssid>
+psk=<pre-shared key>
+```
+
+Settings made on the console take precedence.
+
 ## First start
 
 Connect to the console (same USB cable) and set at least:
@@ -42,7 +56,15 @@ save
 reboot
 ```
 
-`help` lists all commands, `show status` shows network, time and sensor state.
+`help` lists all commands, `show status` shows network, time and sensor state,
+`screen` prints the e-paper content as ASCII art.
+
+1-Wire probes behind a DS2484: `onewire scan`, then `onewire name <rom> <name>`.
+
+## Display and keys
+
+Rotary switch up/down: pages (overview, network, time, one per sensor, system).
+MENU or EXIT: back to the overview. Rotary press: full refresh (clears ghosting).
 
 ## Network and time defaults
 
@@ -53,4 +75,5 @@ reboot
 
 ## License
 
-TBD.
+MIT, see [LICENSE](LICENSE). Generated fonts: DejaVu (Bitstream Vera license),
+see `components/ui/fonts/LICENSE-DejaVu`.

@@ -78,14 +78,29 @@ esp_err_t timesync_apply(void)
 
 static void on_wifi_disconnect(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    if (!s_from_config) {
+    // Drop a server learned from DHCP option 42, so a new lease without option 42 falls back.
+    // Nothing to do otherwise: re-initialising SNTP here would only delay the first sync.
+    timesync_status_t st;
+    timesync_get_status(&st);
+    if (st.source == TIMESYNC_SRC_DHCP) {
         timesync_apply();
+    }
+}
+
+static void on_got_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    // A request sent before the interface had an address failed, and lwIP would wait for its
+    // retry timeout (15 s, doubling). Ask now that a route exists. Thread-safe (tcpip_callback).
+    if (s_inited) {
+        esp_sntp_restart();
     }
 }
 
 esp_err_t timesync_start(void)
 {
     esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, on_wifi_disconnect, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_got_ip, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6, on_got_ip, NULL);
     return timesync_apply();
 }
 

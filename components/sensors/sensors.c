@@ -19,14 +19,18 @@ static const char *TAG = "sensors";
 static const sensor_driver_t *const k_drivers[] = {
     &sensor_drv_bme68x,
     &sensor_drv_bh1750,
+    &sensor_drv_ds2484,
 };
 
-#define MAX_INST 8
+#define MAX_INST SENSORS_MAX
 #define RETRY_US (5LL * 1000 * 1000)
 
 static sensor_inst_t s_inst[MAX_INST];
 static int s_n;
 static SemaphoreHandle_t s_lock;
+static TaskHandle_t s_task;
+static int s_dropped;                 // sensors found beyond MAX_INST
+static char s_dropped_addrs[40];
 
 esp_err_t sensor_read_reg(sensor_inst_t *s, uint8_t reg, uint8_t *buf, size_t len)
 {
@@ -46,9 +50,22 @@ esp_err_t sensor_write_reg(sensor_inst_t *s, uint8_t reg, const uint8_t *buf, si
 
 void sensor_publish(sensor_inst_t *s, const char *quantity, float value)
 {
+    sensor_publish_as(s->name, quantity, value);
+}
+
+void sensor_publish_as(const char *instance, const char *quantity, float value)
+{
     char key[METRIC_KEY_LEN];
-    snprintf(key, sizeof(key), "%s.%s", s->name, quantity);
+    snprintf(key, sizeof(key), "%s.%s", instance, quantity);
     metrics_publish(key, value);
+}
+
+void sensors_kick(sensor_inst_t *s)
+{
+    s->next_us = 0;
+    if (s_task) {
+        xTaskNotifyGive(s_task);
+    }
 }
 
 static void probe_all(void)
@@ -57,9 +74,17 @@ static void probe_all(void)
     uint8_t claimed[128] = {0};
     for (size_t d = 0; d < sizeof(k_drivers) / sizeof(k_drivers[0]); d++) {
         const sensor_driver_t *drv = k_drivers[d];
-        for (int a = 0; a < drv->n_addrs && s_n < MAX_INST; a++) {
+        for (int a = 0; a < drv->n_addrs; a++) {
             uint8_t addr = drv->addrs[a];
             if (claimed[addr] || i2c_master_probe(bus, addr, 50) != ESP_OK) {
+                continue;
+            }
+            if (s_n >= MAX_INST) {
+                // no room: report it, keep the sensors found first
+                claimed[addr] = 1;
+                s_dropped++;
+                size_t l = strlen(s_dropped_addrs);
+                snprintf(s_dropped_addrs + l, sizeof(s_dropped_addrs) - l, "%s0x%02x", l ? " " : "", addr);
                 continue;
             }
             sensor_inst_t *s = &s_inst[s_n];
@@ -121,7 +146,7 @@ static void sensors_task(void *arg)
         }
         int64_t wait_us = next - esp_timer_get_time();
         if (wait_us > 0) {
-            vTaskDelay(pdMS_TO_TICKS((wait_us + 999) / 1000));
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS((wait_us + 999) / 1000));   // sensors_kick() wakes early
         }
     }
 }
@@ -133,9 +158,13 @@ esp_err_t sensors_start(void)
     if (s_n == 0) {
         ESP_LOGW(TAG, "no sensors found");
     }
+    if (s_dropped) {
+        ESP_LOGE(TAG, "%d more sensor(s) found than supported (max %d) - ignored: %s", s_dropped, MAX_INST,
+                 s_dropped_addrs);
+    }
     esp_event_post(APP_EVENT, APP_EVENT_SENSORS_CHANGED, NULL, 0, 0);
     // BSEC needs a large stack (work buffers on the stack in its examples, plus float math)
-    xTaskCreate(sensors_task, "sensors", 8192, NULL, 4, NULL);
+    xTaskCreate(sensors_task, "sensors", 8192, NULL, 4, &s_task);
     return ESP_OK;
 }
 
@@ -165,4 +194,29 @@ void sensors_save_state(void)
             s_inst[i].drv->save_state(&s_inst[i]);
         }
     }
+}
+
+bool sensors_detail(int idx, char *buf, size_t len)
+{
+    if (idx < 0 || idx >= s_n || !s_inst[idx].supported || !s_inst[idx].drv->detail) {
+        return false;
+    }
+    s_inst[idx].drv->detail(&s_inst[idx], buf, len);
+    return true;
+}
+
+void sensors_warnings(char *buf, size_t len)
+{
+    buf[0] = '\0';
+    if (s_dropped) {
+        snprintf(buf, len, "%d sensor(s) over limit %d", s_dropped, MAX_INST);
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < s_n; i++) {
+        if (s_inst[i].warn[0]) {
+            size_t l = strlen(buf);
+            snprintf(buf + l, len - l, "%s%s", l ? "; " : "", s_inst[i].warn);
+        }
+    }
+    xSemaphoreGive(s_lock);
 }

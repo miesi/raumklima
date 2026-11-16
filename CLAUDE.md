@@ -39,6 +39,8 @@ GitHub - everything committed must be fit for that (no secrets, no unlicensed th
   `_lx`, `_ohm`).
 - Every device-specific value (WLAN, hostname, NTP, TZ, names) lives in NVS via `appcfg` and is
   settable on the console. Compile-time values are defaults only.
+- Limits (`CONFIG_HUB_SENSORS_MAX`, `OW_MAX_DEVICES`) are enforced with an error message and
+  the first devices found keep working - never a silent truncation.
 - Board pins only in `components/board/`. Nothing else hard-codes a GPIO number.
 - Timestamps sent off-device are UTC; TZ is for display only.
 
@@ -46,7 +48,9 @@ GitHub - everything committed must be fit for that (no secrets, no unlicensed th
 
 - Allowed: code with a license compatible with publishing (Bosch BME68x SensorAPI BSD-3,
   Sensirion drivers BSD-3), vendored or via the IDF component manager, license file kept.
-- Not allowed in the repo: Elecrow example code (no license), Bosch BSEC binaries (Bosch license).
+- Not allowed in the repo: Elecrow example code (no license), Bosch BSEC binaries (Bosch license),
+  GPL code (GxEPD2, Linux drivers) - those were read for facts only.
+- Fonts: `tools/mkfont.py` generates `components/ui/fonts/*.c` from DejaVu (needs Pillow).
 
 ## Writing style
 

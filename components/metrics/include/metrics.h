@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 #define METRIC_KEY_LEN 40
-#define METRICS_MAX 48
+#define METRICS_MAX 64
 #define METRIC_STALE_US (60LL * 1000 * 1000)   // older than this = not shown
 
 typedef struct {

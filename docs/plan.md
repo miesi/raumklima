@@ -1,6 +1,7 @@
 # Firmware skeleton - plan
 
-Status: 2026-11-16 - M0 to M3 implemented and tested on the CrowPanel 5.79 (see "Milestones").
+Status: 2026-11-16 - M0 to M4 implemented and tested on the CrowPanel 5.79 (see "Milestones").
+Open: visual check of the panel (orientation, seam), key test, NTP fallback test (option 42 off).
 
 ## Decisions (2026-11-16)
 
@@ -116,6 +117,25 @@ I2C addresses - conflicts decide which combinations are possible on one bus:
 Consequence: SHT40 and SHT45 together need different address variants, BME680 and BME690
 together need one on 0x76 and one on 0x77. If that is not possible: second I2C bus (ESP32-S3
 has two controllers).
+
+### Limits and 1-Wire data model
+
+- I2C: at most `CONFIG_HUB_SENSORS_MAX` (default 8) sensor instances. More found: error in the
+  log with the ignored addresses, `WARNING` in `show status`, "! n sensor(s) over limit" on the
+  overview; the sensors found first (registry order, then address order) keep working.
+  Tested 2026-11-16 with the limit set to 1 (BME680 kept, BH1750 at 0x23 reported).
+- DS2484 (fixed address 0x18): up to `OW_MAX_DEVICES` = 8 devices on its 1-Wire bus.
+  Each device = 64-bit ROM ID (shown as 16 hex digits, family code first) plus an optional
+  name set on the console (`onewire name <rom> <name>`, `[a-z0-9_]`, max 15 chars, saved in
+  NVS at once, up to 16 names so spare probes keep theirs). The name is the metric instance:
+  `<name>.temperature_c`; unnamed probes use `ow_<rom>`.
+- 9 or more devices: the search keeps counting up to 32, then error "n 1-Wire devices found,
+  max 8 - using the first 8" (log, console, display); the first 8 in search order are used.
+  Search order is deterministic (ROM bit order), so the same probes win after every reboot.
+- `onewire selftest [n]` runs the search on a simulated bus with n devices and checks CRC-8
+  against the Maxim AN27 example ROM. Tested 2026-11-16 with n = 0, 3, 8, 9, 40: PASS.
+- DS2484 driver: command set from the Linux ds2482 driver (Analog Devices datasheets were not
+  reachable). NOT yet tested on hardware - ASSUMPTION until a DS2484 is connected.
 
 ### Networking
 

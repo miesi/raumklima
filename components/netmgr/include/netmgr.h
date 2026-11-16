@@ -42,6 +42,9 @@ void netmgr_get_status(netmgr_status_t *out);
 
 esp_netif_t *netmgr_netif(void);
 
+// RFC 5952 text form (zero compression), e.g. "2003:e5:6f22:3000::1".
+void netmgr_ip6_str(const esp_ip6_addr_t *a, char *buf, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

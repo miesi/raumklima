@@ -20,6 +20,8 @@ typedef struct {
     // On error: return a negative value; the registry counts it and retries in 5 s.
     int64_t (*poll)(sensor_inst_t *s, int64_t now_us);
     void (*save_state)(sensor_inst_t *s);    // optional
+    // optional: multi-line text for the display/console detail page (e.g. one line per 1-Wire probe)
+    void (*detail)(sensor_inst_t *s, char *buf, size_t len);
 } sensor_driver_t;
 
 struct sensor_inst {
@@ -29,6 +31,7 @@ struct sensor_inst {
     char name[16];
     char model[24];
     char info[48];
+    char warn[48];         // non-empty = problem to show on the overview
     bool supported;
     void *ctx;
     int64_t next_us;
@@ -41,6 +44,11 @@ struct sensor_inst {
 esp_err_t sensor_read_reg(sensor_inst_t *s, uint8_t reg, uint8_t *buf, size_t len);
 esp_err_t sensor_write_reg(sensor_inst_t *s, uint8_t reg, const uint8_t *buf, size_t len);
 void sensor_publish(sensor_inst_t *s, const char *quantity, float value);
+// for drivers with several measuring points (1-Wire probes): own instance name per point
+void sensor_publish_as(const char *instance, const char *quantity, float value);
+// poll this instance as soon as possible
+void sensors_kick(sensor_inst_t *s);
 
 extern const sensor_driver_t sensor_drv_bh1750;
 extern const sensor_driver_t sensor_drv_bme68x;
+extern const sensor_driver_t sensor_drv_ds2484;

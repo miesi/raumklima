@@ -2,6 +2,7 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
@@ -20,6 +21,7 @@
 #include "i2cbus.h"
 #include "metrics.h"
 #include "netmgr.h"
+#include "onewire.h"
 #include "sensors.h"
 #include "timesync.h"
 
@@ -123,6 +125,11 @@ static void show_status(void)
     for (int i = 0; i < ns; i++) {
         printf("sensor     0x%02x %-8s as %-8s ok %" PRIu32 " err %" PRIu32 "  %s%s\n", si[i].addr, si[i].model,
                si[i].name, si[i].ok_count, si[i].err_count, si[i].supported ? "" : "NOT SUPPORTED ", si[i].info);
+    }
+    char warn[128];
+    sensors_warnings(warn, sizeof(warn));
+    if (warn[0]) {
+        printf("WARNING    %s\n", warn);
     }
     printf("metrics\n");
     metrics_foreach(print_metric, NULL);
@@ -259,6 +266,107 @@ static int cmd_i2c(int argc, char **argv)
     return 0;
 }
 
+static void ow_print(void)
+{
+    sensors_ow_dev_t d[OW_MAX_DEVICES];
+    int found = 0;
+    int n = sensors_onewire_list(d, OW_MAX_DEVICES, &found);
+    if (n < 0) {
+        printf("no DS2484 found\n");
+        return;
+    }
+    if (found > OW_MAX_DEVICES) {
+        printf("ERROR: %d%s 1-Wire devices found, max %d - using the first %d\n", found,
+               found >= OW_SEARCH_LIMIT ? "+" : "", OW_MAX_DEVICES, OW_MAX_DEVICES);
+    }
+    printf("%d device(s) in use\n", n);
+    for (int i = 0; i < n; i++) {
+        char rom[OW_ROM_STR_LEN];
+        ow_rom_str(d[i].rom, rom);
+        printf("  %d %s %-15s ", i + 1, rom, d[i].name);
+        if (ow_family(d[i].rom) != OW_FAMILY_DS18B20) {
+            printf("family 0x%02x, not read\n", ow_family(d[i].rom));
+        } else if (d[i].valid) {
+            printf("%7.2f C  crc errors %" PRIu32 "\n", d[i].temp_c, d[i].crc_errors);
+        } else {
+            printf("     --  crc errors %" PRIu32 "\n", d[i].crc_errors);
+        }
+    }
+}
+
+static int cmd_onewire(int argc, char **argv)
+{
+    if (argc >= 2 && strcmp(argv[1], "scan") == 0) {
+        uint32_t before = sensors_onewire_rescan();
+        for (int i = 0; i < 50 && sensors_onewire_scan_count() == before; i++) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        ow_print();
+        return 0;
+    }
+    if (argc >= 2 && strcmp(argv[1], "list") == 0) {
+        ow_print();
+        return 0;
+    }
+    if (argc >= 3 && (strcmp(argv[1], "name") == 0 || strcmp(argv[1], "forget") == 0)) {
+        uint64_t rom;
+        if (!ow_rom_parse(argv[2], &rom)) {
+            printf("ROM ID: 16 hex digits as shown by 'onewire scan'\n");
+            return 1;
+        }
+        bool forget = strcmp(argv[1], "forget") == 0;
+        if (!forget && argc != 4) {
+            printf("usage: onewire name <rom> <name>\n");
+            return 1;
+        }
+        esp_err_t err = ow_name_set(rom, forget ? NULL : argv[3]);
+        if (err == ESP_ERR_INVALID_ARG) {
+            printf("name: 1-%d chars [a-z0-9_], not starting with ow_\n", OW_NAME_LEN - 1);
+        } else if (err == ESP_ERR_INVALID_STATE) {
+            printf("name already used by another device\n");
+        } else if (err == ESP_ERR_NO_MEM) {
+            printf("name table full (%d) - 'onewire forget' an old one\n", OW_NAMES_MAX);
+        } else if (err != ESP_OK) {
+            printf("%s\n", esp_err_to_name(err));
+        } else {
+            printf("saved\n");
+            sensors_onewire_rescan();   // picks up the new name
+        }
+        return err == ESP_OK ? 0 : 1;
+    }
+    if (argc >= 2 && strcmp(argv[1], "names") == 0) {
+        uint64_t roms[OW_NAMES_MAX];
+        char names[OW_NAMES_MAX][OW_NAME_LEN];
+        int n = ow_names_list(roms, names, OW_NAMES_MAX);
+        printf("%d of %d names stored\n", n, OW_NAMES_MAX);
+        for (int i = 0; i < n; i++) {
+            char rom[OW_ROM_STR_LEN];
+            ow_rom_str(roms[i], rom);
+            printf("  %s %s\n", rom, names[i]);
+        }
+        return 0;
+    }
+    if (argc >= 2 && strcmp(argv[1], "selftest") == 0) {
+        int n = argc >= 3 ? atoi(argv[2]) : OW_MAX_DEVICES + 1;
+        char *rep = malloc(1024);
+        if (!rep) {
+            return 1;
+        }
+        bool ok = ow_selftest(n, rep, 1024);
+        printf("%s", rep);
+        free(rep);
+        return ok ? 0 : 1;
+    }
+    printf("usage:\n"
+           "  onewire scan                 search the bus, list devices\n"
+           "  onewire list                 last search result\n"
+           "  onewire name <rom> <name>    name a probe (saved at once)\n"
+           "  onewire forget <rom>         remove a name\n"
+           "  onewire names                stored names, also of absent probes\n"
+           "  onewire selftest [n]         search on a simulated bus with n devices\n");
+    return 1;
+}
+
 static int cmd_version(int argc, char **argv)
 {
     const esp_app_desc_t *app = esp_app_get_description();
@@ -295,6 +403,7 @@ esp_err_t console_cmds_start(void)
         {.command = "reboot", .help = "restart (saves BSEC state)", .func = cmd_reboot},
         {.command = "factory-reset", .help = "erase all settings: factory-reset yes", .func = cmd_factory_reset},
         {.command = "i2c", .help = "i2c scan", .func = cmd_i2c},
+        {.command = "onewire", .help = "onewire scan|list|name|forget|names|selftest", .func = cmd_onewire},
         {.command = "version", .help = "firmware version", .func = cmd_version},
         {.command = "log", .help = "log on|off", .func = cmd_log},
     };
