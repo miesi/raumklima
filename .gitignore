@@ -1,0 +1,47 @@
+# --- ESP-IDF build output ---
+build/
+build-*/
+# generated per developer/board from sdkconfig.defaults - commit sdkconfig.defaults* instead
+sdkconfig
+sdkconfig.old
+# components fetched by the IDF component manager (pinned in dependencies.lock, which IS committed)
+managed_components/
+
+# --- secrets: credentials live in NVS on the device, never in the repo ---
+# build-time WLAN defaults (ssid=..., psk=...), see README
+wlan.config
+*.pem
+*.key
+*.crt
+!docs/**/*.pem
+secrets.*
+sdkconfig.secrets
+# NVS partition images generated from CSV for bulk provisioning
+nvs_*.bin
+nvs_*.csv
+
+# --- debugging artefacts ---
+*.elf.dump
+coredump*.bin
+core*.elf
+
+# --- editors / IDEs ---
+.vscode/
+.idea/
+nbproject/
+.cache/
+.clangd
+compile_commands.json
+*.swp
+*~
+
+# --- OS ---
+.DS_Store
+
+# --- Python (idf.py helpers, test scripts) ---
+__pycache__/
+*.pyc
+.venv/
+
+# --- Claude Code local settings (personal, not shared) ---
+.claude/settings.local.json

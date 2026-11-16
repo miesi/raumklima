@@ -1,0 +1,29 @@
+menu "Board"
+
+    choice HUB_BOARD
+        prompt "Board"
+        default HUB_BOARD_CROWPANEL_579
+        config HUB_BOARD_CROWPANEL_579
+            bool "Elecrow CrowPanel ESP32 E-Paper 5.79in (DIS08792E)"
+    endchoice
+
+    config HUB_I2C_SDA_GPIO
+        int "I2C SDA GPIO"
+        default 3
+        help
+            CrowPanel 5.79: header U5 pin 1. GPIO3 is a strapping pin only if
+            eFuse STRAP_JTAG_SEL is set (it is not). See docs/hardware-crowpanel-579.md.
+
+    config HUB_I2C_SCL_GPIO
+        int "I2C SCL GPIO"
+        default 8
+        help
+            CrowPanel 5.79: header U5 pin 20.
+
+    config HUB_I2C_FREQ_HZ
+        int "I2C clock in Hz"
+        default 100000
+        help
+            100 kHz: safe with long jumper wires and breakout pull-ups of unknown value.
+
+endmenu
