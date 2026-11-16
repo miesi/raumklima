@@ -33,6 +33,11 @@ esp_err_t sensors_start(void);
 // Copies up to max entries, returns count.
 int sensors_list(sensor_info_t *out, int max);
 
+// Pauses all driver polling (multi-step sequences like command - wait - read included) so a
+// bus scan does not land between the steps.
+void sensors_bus_lock(void);
+void sensors_bus_unlock(void);
+
 // Driver detail text for sensor idx (as listed); false if the driver has none.
 bool sensors_detail(int idx, char *buf, size_t len);
 

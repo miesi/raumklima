@@ -21,6 +21,7 @@ def main():
     ap.add_argument("--reset", action="store_true", help="pulse EN via RTS before reading")
     ap.add_argument("-c", "--cmd", action="append", default=[], help="console command, repeatable")
     ap.add_argument("--cmd-delay", type=float, default=1.5, help="seconds before each command")
+    ap.add_argument("--repeat", type=int, default=1, help="send the command list this many times")
     a = ap.parse_args()
 
     # DTR drives IO0 through the auto-reset transistor: keep it inactive, or the chip boots
@@ -44,7 +45,7 @@ def main():
                 out.write(data.decode("utf-8", "replace"))
                 out.flush()
 
-    for c in a.cmd:
+    for c in a.cmd * a.repeat:
         pump(a.cmd_delay)
         s.write((c + "\r\n").encode())
     pump(a.time)

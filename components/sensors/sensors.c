@@ -32,6 +32,7 @@ static sensor_inst_t s_inst[MAX_INST];
 static int s_n;
 static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_task;
+static SemaphoreHandle_t s_bus_lock;   // held for each driver poll; see sensors_bus_lock()
 static int s_dropped;                 // sensors found beyond MAX_INST
 static char s_dropped_addrs[40];
 
@@ -92,7 +93,7 @@ static void probe_all(void)
         const sensor_driver_t *drv = k_drivers[d];
         for (int a = 0; a < drv->n_addrs; a++) {
             uint8_t addr = drv->addrs[a];
-            if (claimed[addr] || i2c_master_probe(bus, addr, 50) != ESP_OK) {
+            if (claimed[addr] || i2cbus_probe(addr) != ESP_OK) {
                 continue;
             }
             if (s_n >= MAX_INST) {
@@ -143,7 +144,9 @@ static void sensors_task(void *arg)
                 continue;
             }
             if (s->next_us <= now) {
+                xSemaphoreTake(s_bus_lock, portMAX_DELAY);
                 int64_t due = s->drv->poll(s, now);
+                xSemaphoreGive(s_bus_lock);
                 xSemaphoreTake(s_lock, portMAX_DELAY);
                 if (due < 0) {
                     s->err_count++;
@@ -170,6 +173,7 @@ static void sensors_task(void *arg)
 esp_err_t sensors_start(void)
 {
     s_lock = xSemaphoreCreateMutex();
+    s_bus_lock = xSemaphoreCreateMutex();
     probe_all();
     if (s_n == 0) {
         ESP_LOGW(TAG, "no sensors found");
@@ -209,6 +213,20 @@ void sensors_save_state(void)
         if (s_inst[i].supported && s_inst[i].drv->save_state) {
             s_inst[i].drv->save_state(&s_inst[i]);
         }
+    }
+}
+
+void sensors_bus_lock(void)
+{
+    if (s_bus_lock) {
+        xSemaphoreTake(s_bus_lock, portMAX_DELAY);
+    }
+}
+
+void sensors_bus_unlock(void)
+{
+    if (s_bus_lock) {
+        xSemaphoreGive(s_bus_lock);
     }
 }
 

@@ -261,7 +261,9 @@ static int cmd_i2c(int argc, char **argv)
         return 1;
     }
     uint8_t found[128];
+    sensors_bus_lock();
     int n = i2cbus_scan(found);
+    sensors_bus_unlock();
     printf("%d device(s):", n);
     for (int a = 0; a < 128; a++) {
         if (found[a]) {
