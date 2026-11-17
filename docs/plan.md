@@ -156,6 +156,20 @@ has two controllers).
   plausibility check at 65 s uptime; a session started with a full window restarted at 1/36
   readings and, stable after 3 min, was refused (1443 ppm measured, target 430). No FRC ran.
 
+### SCD41 incident 2026-11-17
+
+- Fresh-air FRC 2026-11-16 23:52 UTC, 430 ppm, correction +31 (plausible: indoor at an open
+  window read 396 ppm). Next morning: CO2 0 ppm with valid CRC, T/RH plausible; self test
+  0x0004 at 06:50 UTC (also after a reboot, which does not cut the sensor supply).
+- About 07:20 UTC it read ~1450 ppm again; 08:xx: self test 0x0000, periodic 1226 ppm,
+  single shot 1244 ppm. What happened in between is not known (power cycle by the user?).
+- Sensirion (testing guide 2021-01, p. 15): a self test result other than 0 means a sensor
+  malfunction OR an unstable or insufficient supply. No public decoding of 0x0004 found.
+- Candidates, none proven: condensation (cold outdoor air, then a warm room; datasheet: non-
+  condensing only), supply (peak 175/205 mA at 3.3 V, <= 30 mV variation from other loads,
+  separate LDO recommended - here shared 3.3 V with ESP32 WLAN and e-paper via a STEMMA hub).
+- Firmware consequences: readings < 300 ppm are a fault, not data; debug commands in 'scd41'.
+
 ### Networking
 
 - `esp_netif` default WLAN STA. Hostname from NVS (`set hostname`) via

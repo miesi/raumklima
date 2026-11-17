@@ -84,6 +84,17 @@ SCD41 (CO2):
   (default 430) - or refuses if the measured mean is more than 150 ppm away from it.
   Progress and result on the display.
 - The display warns when CO2 was not below 450 ppm for more than 156 h.
+- Debugging: `scd41 status`, `scd41 diag` (settings + built-in self test), `scd41 single`,
+  `scd41 log on|off`, `scd41 reinit`, `scd41 sleep-cycle`, `scd41 asc on|off`.
+- `scd41 factory-reset yes` erases every calibration of the sensor - irreversible.
+- Readings below 300 ppm are treated as a sensor fault (warning on the display), not as data.
+- Do not take the device from cold outdoor air straight into a warm room while it runs: the
+  SCD4x is specified for non-condensing humidity only (datasheet v1.5, table 5).
+
+BME6xx page: IAQ 0..500, lower is better (50 typical good air, 200 typical polluted air,
+relative to the last ~4 days). Accuracy 0..3: 0 run-in, 3 calibrated (Bosch BSEC Integration
+Guide). BSEC saves its learning state every 4 h and on `reboot`; a reset or reflash in between
+loses up to 4 h of learning.
 
 `led on|off` switches the red LED (off after boot).
 

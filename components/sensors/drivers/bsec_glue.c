@@ -6,6 +6,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "metrics.h"
 #include "nvs.h"
 
 static const char *TAG = "bsec";
@@ -261,4 +262,81 @@ int64_t bme_bsec_poll(sensor_inst_t *s, bme_bsec_t *b, int64_t now_us)
         bme_bsec_save(b);
     }
     return st.next_call / 1000;
+}
+
+// --- detail page ---
+
+static bool get(sensor_inst_t *s, const char *q, float *v)
+{
+    char key[METRIC_KEY_LEN];
+    metric_t m;
+    snprintf(key, sizeof(key), "%s.%s", s->name, q);
+    if (!metrics_get(key, &m)) {
+        return false;
+    }
+    *v = m.value;
+    return true;
+}
+
+// Meaning of the IAQ accuracy, Bosch BSEC Integration Guide (BSEC 3.3, AN011, section 5.3.2.1, p. 51)
+static const char *accuracy_text(int a)
+{
+    switch (a) {
+    case 0: return "run-in, not reliable yet";
+    case 1: return "low";
+    case 2: return "medium, self-calibrating";
+    case 3: return "high";
+    default: return "?";
+    }
+}
+
+void bme_bsec_detail(sensor_inst_t *s, const bme_bsec_t *b, char *buf, size_t len)
+{
+    float v, acc = -1;
+    size_t o = 0;
+#define ADD(...) o += snprintf(buf + o, o < len ? len - o : 0, __VA_ARGS__)
+    get(s, "iaq_accuracy", &acc);
+    if (get(s, "iaq", &v)) {
+        ADD("IAQ          %.0f\n", v);
+        ADD("Accuracy     %.0f of 3: %s\n", acc, accuracy_text((int)acc));
+    }
+    if (get(s, "static_iaq", &v)) {
+        ADD("Static IAQ   %.0f\n", v);
+    }
+    if (get(s, "co2eq_ppm", &v)) {
+        ADD("CO2 equiv.   %.0f ppm (estimate)\n", v);
+    }
+    if (get(s, "tvoc_ppb", &v)) {
+        ADD("TVOC equiv.  %.0f ppb\n", v);
+    }
+    if (get(s, "bvoc_ppm", &v)) {
+        ADD("bVOC equiv.  %.2f ppm\n", v);
+    }
+    if (get(s, "gas_ohm", &v)) {
+        ADD("Gas          %.1f kOhm\n", v / 1000.0f);
+    }
+    float st = -1, ri = -1;
+    get(s, "stab_status", &st);
+    get(s, "runin_status", &ri);
+    ADD("Stabilized   %s, run-in %s\n", st > 0.5f ? "yes" : "no", ri > 0.5f ? "done" : "ongoing");
+    if (get(s, "temperature_c", &v)) {
+        ADD("Temperature  %.1f \xc2\xb0" "C\n", v);
+    }
+    if (get(s, "humidity_pct", &v)) {
+        ADD("Humidity     %.0f %%\n", v);
+    }
+    if (get(s, "pressure_hpa", &v)) {
+        ADD("Pressure     %.0f hPa", v);
+    }
+    // Bosch BSEC Integration Guide (BSEC 3.3, AN011): IAQ p. 31, accuracy p. 10 and 51
+    ADD("\fIAQ 0..500, lower is better\n"
+        "50 = typical good air\n"
+        "200 = typical polluted air\n"
+        "relative: learns the last ~4 days\n"
+        "Accuracy 0: run-in, IAQ not reliable\n"
+        "1: let it see fresh air and bad air\n"
+        "   (breath) ~30 min each\n"
+        "2: self-calibration ongoing\n"
+        "3: calibrated");
+#undef ADD
 }

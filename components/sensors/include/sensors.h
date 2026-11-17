@@ -64,7 +64,13 @@ uint32_t sensors_onewire_scan_count(void);
 esp_err_t sensors_scd4x_offset_auto(char *msg, size_t len);          // against SHT4x
 esp_err_t sensors_scd4x_offset_set(float c, char *msg, size_t len);
 esp_err_t sensors_scd4x_offset_reset(char *msg, size_t len);
-esp_err_t sensors_scd4x_diag(char *msg, size_t len);               // settings + 10 s self test        // back to the sensor's EEPROM value
+#define SCD4X_MSG_LEN 512
+esp_err_t sensors_scd4x_diag(char *msg, size_t len);               // settings + 10 s self test
+esp_err_t sensors_scd4x_single_shot(char *msg, size_t len);        // one measurement outside periodic mode
+esp_err_t sensors_scd4x_reinit(bool sleep_cycle, char *msg, size_t len);   // reinit or power_down/wake_up
+esp_err_t sensors_scd4x_asc(bool on, char *msg, size_t len);       // RAM only
+esp_err_t sensors_scd4x_factory_reset(char *msg, size_t len);      // erases FRC/ASC history - irreversible
+void sensors_scd4x_log_raw(bool on);                               // print every raw reading        // back to the sensor's EEPROM value
 esp_err_t sensors_scd4x_frc(uint16_t ppm, bool force, char *msg, size_t len);
 esp_err_t sensors_scd4x_set_outdoor(uint16_t ppm);                   // 380..500, NVS
 // "I am in fresh air": counts only readings from now on, waits until they were stable for 3 min

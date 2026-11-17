@@ -162,6 +162,16 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
     return now_us + RAW_PERIOD_US;
 }
 
+static void detail(sensor_inst_t *s, char *buf, size_t len)
+{
+    ctx_t *c = s->ctx;
+    if (c && c->use_bsec) {
+        bme_bsec_detail(s, &c->bsec, buf, len);
+    } else {
+        snprintf(buf, len, "no IAQ in this build - see 'sensor' info");
+    }
+}
+
 static void save_state(sensor_inst_t *s)
 {
     ctx_t *c = s->ctx;
@@ -177,4 +187,5 @@ const sensor_driver_t sensor_drv_bme68x = {
     .probe = probe,
     .poll = poll,
     .save_state = save_state,
+    .detail = detail,
 };

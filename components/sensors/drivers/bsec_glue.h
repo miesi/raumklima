@@ -40,3 +40,6 @@ bool bme_bsec_init(bme_bsec_t *b, bsec_chip_t chip, bme_measure_fn measure, void
 int64_t bme_bsec_poll(sensor_inst_t *s, bme_bsec_t *b, int64_t now_us);
 
 void bme_bsec_save(bme_bsec_t *b);
+
+// Detail text: values, then '\f', then the meaning of IAQ and accuracy (display: two columns).
+void bme_bsec_detail(sensor_inst_t *s, const bme_bsec_t *b, char *buf, size_t len);

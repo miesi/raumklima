@@ -435,6 +435,13 @@ static void page_sensor(int idx, char *c0, size_t l0, char *c1, size_t l1)
         return;
     }
     if (sensors_detail(idx, c0, l0)) {
+        // a form feed splits the detail text: values left, explanations right
+        char *ff = strchr(c0, '\f');
+        if (ff) {
+            *ff = '\0';
+            strlcpy(c1, ff + 1, l1);
+            return;
+        }
         snprintf(c1, l1, "%s\nreads ok %" PRIu32 ", errors %" PRIu32, s->info, s->ok_count, s->err_count);
         return;
     }

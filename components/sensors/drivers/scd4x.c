@@ -50,6 +50,15 @@ static const char *TAG = "scd4x";
 #define CMD_SELF_TEST        0x3639   // idle only, 10 s, 0 = no malfunction
 #define CMD_SERIAL           0x3682
 #define CMD_VARIANT          0x202F
+#define CMD_FACTORY_RESET    0x3632   // idle only, 1200 ms: EEPROM settings + FRC/ASC history erased
+#define CMD_SET_ASC_ENABLED  0x2416   // idle only
+#define CMD_GET_ASC_INITIAL  0x2340   // hours
+#define CMD_GET_ASC_STANDARD 0x234B   // hours
+#define CMD_GET_ALTITUDE     0x2322
+#define CMD_SINGLE_SHOT      0x219D   // idle only, 5000 ms (SCD41/43)
+#define CMD_POWER_DOWN       0x36E0   // idle -> sleep, 1 ms
+#define CMD_WAKE_UP          0x36F6   // sleep -> idle, 30 ms, NOT acknowledged by the sensor
+// command codes and durations: Sensirion SCD4x datasheet v1.5 (July 2023), table 9
 
 #define PERIOD_US            (5LL * 1000 * 1000)
 #define PRESSURE_EVERY_US    (60LL * 1000 * 1000)
@@ -66,7 +75,20 @@ static const char *TAG = "scd4x";
 
 static const uint8_t k_addrs[] = {0x62};
 
-typedef enum { REQ_NONE, REQ_OFFSET_AUTO, REQ_OFFSET_SET, REQ_OFFSET_RESET, REQ_FRC, REQ_FRC_FORCE, REQ_DIAG } req_t;
+typedef enum {
+    REQ_NONE,
+    REQ_OFFSET_AUTO,
+    REQ_OFFSET_SET,
+    REQ_OFFSET_RESET,
+    REQ_FRC,
+    REQ_FRC_FORCE,
+    REQ_DIAG,
+    REQ_SINGLE,
+    REQ_REINIT,
+    REQ_SLEEP_CYCLE,
+    REQ_ASC,
+    REQ_FACTORY_RESET,
+} req_t;
 
 typedef struct {
     sensor_inst_t *s;
@@ -92,7 +114,7 @@ typedef struct {
     req_t req;
     float req_arg;
     esp_err_t req_err;
-    char req_msg[200];
+    char req_msg[SCD4X_MSG_LEN];
     // fresh-air session (BOOT long press); started in the sensors task, see poll()
     volatile bool session_req;
     bool session;
@@ -101,6 +123,9 @@ typedef struct {
     int64_t session_msg_until_us;
     bool asc_target_ok;
     uint32_t implausible;           // consecutive readings below CO2_PLAUSIBLE_MIN
+    bool log_raw;                   // 'scd41 log on': print every raw reading
+    uint16_t last_ready, last_raw[3];
+    uint32_t n_readings;
 } ctx_t;
 
 static ctx_t s_c;
@@ -334,6 +359,17 @@ static esp_err_t frc_checked(sensor_inst_t *s, uint16_t target, bool force, char
     return ESP_OK;
 }
 
+// after reinit / wake_up / factory reset: our runtime settings (sensor in idle mode)
+static void reapply_settings(sensor_inst_t *s)
+{
+    if (!isnan(s_c.offset_c)) {
+        write_offset(s, s_c.offset_c);
+    }
+    s_c.asc_target_ok = send_word(s, CMD_SET_ASC_TARGET, s_c.outdoor_ppm) == ESP_OK;
+    vTaskDelay(pdMS_TO_TICKS(2));
+    s_c.last_pressure_us = -PRESSURE_EVERY_US;   // pressure compensation again right away
+}
+
 static void handle_request(sensor_inst_t *s)
 {
     req_t r = s_c.req;
@@ -344,23 +380,122 @@ static void handle_request(sensor_inst_t *s)
     char *msg = s_c.req_msg;
     size_t len = sizeof(s_c.req_msg);
     if (r == REQ_DIAG) {
-        // read-only checks; the self test does not touch the calibration
-        uint16_t asc_en = 0xffff, asc_tgt = 0xffff, st = 0xffff;
+        // read-only: settings and the built-in self test; nothing changes the calibration
+        uint16_t sn[3] = {0}, var = 0xffff, asc_en = 0xffff, asc_tgt = 0xffff, asc_ini = 0xffff, asc_std = 0xffff;
+        uint16_t alt = 0xffff, pres = 0xffff, st = 0xffff;
         float off = NAN;
         stop_periodic(s);
-        esp_err_t e1 = read_words(s, CMD_GET_ASC_ENABLED, &asc_en, 1);
-        esp_err_t e2 = read_words(s, CMD_GET_ASC_TARGET, &asc_tgt, 1);
+        esp_err_t e_sn = read_words(s, CMD_SERIAL, sn, 3);
+        read_words(s, CMD_VARIANT, &var, 1);
+        esp_err_t e_asc = read_words(s, CMD_GET_ASC_ENABLED, &asc_en, 1);
+        read_words(s, CMD_GET_ASC_TARGET, &asc_tgt, 1);
+        read_words(s, CMD_GET_ASC_INITIAL, &asc_ini, 1);
+        read_words(s, CMD_GET_ASC_STANDARD, &asc_std, 1);
+        read_words(s, CMD_GET_ALTITUDE, &alt, 1);
+        read_words(s, CMD_SET_PRESSURE, &pres, 1);    // get_ambient_pressure uses the same code
         read_offset(s, &off);
-        esp_err_t e3 = send(s, CMD_SELF_TEST);
+        esp_err_t e_st = send(s, CMD_SELF_TEST);
         vTaskDelay(pdMS_TO_TICKS(10500));
-        if (e3 == ESP_OK) {
-            e3 = receive_words(s, &st, 1);
+        if (e_st == ESP_OK) {
+            e_st = receive_words(s, &st, 1);
         }
         start_periodic(s);
-        snprintf(msg, len, "ASC enabled %u (%s), ASC target %u ppm (%s), T offset %.2f C, self test %s: 0x%04x%s", asc_en,
-                 esp_err_to_name(e1), asc_tgt, esp_err_to_name(e2), off, esp_err_to_name(e3), st,
-                 st == 0 ? " = no malfunction" : " = MALFUNCTION");
-        err = e3;
+        snprintf(msg, len,
+                 "serial      %04x%04x%04x (%s)\n"
+                 "variant     0x%04x\n"
+                 "ASC         enabled %u (%s), target %u ppm, initial %u h, standard %u h\n"
+                 "T offset    %.2f C\n"
+                 "altitude    %u m, ambient pressure %u hPa\n"
+                 "last raw    ready 0x%04x, co2 %u, t %u, rh %u (%lu readings since boot)\n"
+                 "self test   %s: 0x%04x %s",
+                 sn[0], sn[1], sn[2], esp_err_to_name(e_sn), var, asc_en, esp_err_to_name(e_asc), asc_tgt, asc_ini,
+                 asc_std, off, alt, pres, s_c.last_ready, s_c.last_raw[0], s_c.last_raw[1], s_c.last_raw[2],
+                 (unsigned long)s_c.n_readings, esp_err_to_name(e_st), st,
+                 st == 0 ? "= no malfunction"
+                         : "= MALFUNCTION (Sensirion: sensor malfunction or supply voltage/current unstable or too low)");
+        err = e_st;
+        goto out;
+    }
+    if (r == REQ_SINGLE) {
+        // one single-shot measurement in idle mode (SCD41/43), independent of periodic mode
+        uint16_t w[3] = {0};
+        stop_periodic(s);
+        err = send(s, CMD_SINGLE_SHOT);
+        vTaskDelay(pdMS_TO_TICKS(5100));
+        if (err == ESP_OK) {
+            err = read_words(s, CMD_READ_MEASUREMENT, w, 3);
+        }
+        start_periodic(s);
+        snprintf(msg, len, "single shot: %s, co2 %u ppm, t %.2f C, rh %.1f %% (raw 0x%04x 0x%04x 0x%04x)",
+                 esp_err_to_name(err), w[0], -45.0f + 175.0f * w[1] / 65536.0f, 100.0f * w[2] / 65536.0f, w[0], w[1],
+                 w[2]);
+        goto out;
+    }
+    if (r == REQ_REINIT || r == REQ_SLEEP_CYCLE) {
+        stop_periodic(s);
+        if (r == REQ_REINIT) {
+            err = send(s, CMD_REINIT);   // reload user settings from EEPROM
+            vTaskDelay(pdMS_TO_TICKS(30));
+        } else {
+            err = send(s, CMD_POWER_DOWN);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            send(s, CMD_WAKE_UP);        // not acknowledged by design (datasheet 3.10.4)
+            vTaskDelay(pdMS_TO_TICKS(30));
+        }
+        uint16_t sn[3];
+        esp_err_t e2 = read_words(s, CMD_SERIAL, sn, 3);
+        reapply_settings(s);
+        start_periodic(s);
+        snprintf(msg, len, "%s: %s, sensor answers afterwards: %s; offset and ASC target re-applied",
+                 r == REQ_REINIT ? "reinit" : "power_down/wake_up", esp_err_to_name(err), esp_err_to_name(e2));
+        if (err == ESP_OK) {
+            err = e2;
+        }
+        goto out;
+    }
+    if (r == REQ_ASC) {
+        stop_periodic(s);
+        err = send_word(s, CMD_SET_ASC_ENABLED, s_c.req_arg != 0);
+        vTaskDelay(pdMS_TO_TICKS(2));
+        start_periodic(s);
+        snprintf(msg, len, "ASC %s: %s (RAM only, back to the EEPROM value after a power cycle)",
+                 s_c.req_arg != 0 ? "enabled" : "disabled", esp_err_to_name(err));
+        goto out;
+    }
+    if (r == REQ_FACTORY_RESET) {
+        stop_periodic(s);
+        err = send(s, CMD_FACTORY_RESET);
+        vTaskDelay(pdMS_TO_TICKS(1300));
+        uint16_t sn[3];
+        esp_err_t e2 = read_words(s, CMD_SERIAL, sn, 3);
+        // the sensor forgot every FRC and its ASC history: forget our record and offset too
+        nvs_handle_t h;
+        if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+            nvs_erase_key(h, "offset");
+            nvs_erase_key(h, "frc_utc");
+            nvs_erase_key(h, "frc_tgt");
+            nvs_erase_key(h, "frc_corr");
+            nvs_commit(h);
+            nvs_close(h);
+        }
+        s_c.offset_c = NAN;
+        s_c.frc_utc = 0;
+        s_c.frc_target = 0;
+        s_c.frc_correction = 0;
+        s_c.diff_sum = 0;
+        s_c.diff_n = 0;
+        float cur = NAN;
+        read_offset(s, &cur);
+        reapply_settings(s);   // ASC target = outdoor value
+        start_periodic(s);
+        ESP_LOGW(TAG, "factory reset: %s", esp_err_to_name(err));
+        snprintf(msg, len,
+                 "factory reset: %s, sensor answers: %s, EEPROM offset now %.2f C; FRC/ASC history erased, "
+                 "our FRC record and offset cleared",
+                 esp_err_to_name(err), esp_err_to_name(e2), cur);
+        if (err == ESP_OK) {
+            err = e2;
+        }
         goto out;
     }
     if (r == REQ_OFFSET_RESET) {
@@ -556,6 +691,12 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
     if (read_words(s, CMD_READ_MEASUREMENT, w, 3) != ESP_OK) {
         return -1;
     }
+    s_c.last_ready = ready;
+    memcpy(s_c.last_raw, w, sizeof(w));
+    s_c.n_readings++;
+    if (s_c.log_raw) {
+        printf("scd41 raw: ready 0x%04x co2 %u t 0x%04x rh 0x%04x\n", ready, w[0], w[1], w[2]);
+    }
     float t = -45.0f + 175.0f * w[1] / 65536.0f;   // ((21875 * t) >> 13) - 45000
     sensor_publish(s, "temperature_c", t);
     sensor_publish(s, "humidity_pct", 100.0f * w[2] / 65536.0f);   // (12500 * h) >> 13
@@ -706,6 +847,31 @@ esp_err_t sensors_scd4x_offset_set(float c, char *msg, size_t len)
 esp_err_t sensors_scd4x_diag(char *msg, size_t len)
 {
     return request(REQ_DIAG, 0, msg, len);
+}
+
+esp_err_t sensors_scd4x_single_shot(char *msg, size_t len)
+{
+    return request(REQ_SINGLE, 0, msg, len);
+}
+
+esp_err_t sensors_scd4x_reinit(bool sleep_cycle, char *msg, size_t len)
+{
+    return request(sleep_cycle ? REQ_SLEEP_CYCLE : REQ_REINIT, 0, msg, len);
+}
+
+esp_err_t sensors_scd4x_asc(bool on, char *msg, size_t len)
+{
+    return request(REQ_ASC, on ? 1 : 0, msg, len);
+}
+
+esp_err_t sensors_scd4x_factory_reset(char *msg, size_t len)
+{
+    return request(REQ_FACTORY_RESET, 0, msg, len);
+}
+
+void sensors_scd4x_log_raw(bool on)
+{
+    s_c.log_raw = on;
 }
 
 esp_err_t sensors_scd4x_offset_reset(char *msg, size_t len)

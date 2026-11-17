@@ -379,44 +379,88 @@ static int cmd_onewire(int argc, char **argv)
     return 1;
 }
 
+static int cmd_sensor_show(int argc, char **argv);
+
 static int cmd_scd41(int argc, char **argv)
 {
-    char msg[200];
+    char *msg = malloc(SCD4X_MSG_LEN);
+    if (!msg) {
+        return 1;
+    }
+    const size_t len = SCD4X_MSG_LEN;
     esp_err_t err;
-    if (argc == 3 && strcmp(argv[1], "offset") == 0 && strcmp(argv[2], "auto") == 0) {
-        err = sensors_scd4x_offset_auto(msg, sizeof(msg));
-    } else if (argc == 3 && strcmp(argv[1], "offset") == 0 && strcmp(argv[2], "reset") == 0) {
-        err = sensors_scd4x_offset_reset(msg, sizeof(msg));
-    } else if (argc == 3 && strcmp(argv[1], "offset") == 0) {
-        err = sensors_scd4x_offset_set(strtof(argv[2], NULL), msg, sizeof(msg));
-    } else if ((argc == 3 || argc == 4) && strcmp(argv[1], "frc") == 0) {
+    const char *sub = argc >= 2 ? argv[1] : "";
+    if (argc == 3 && strcmp(sub, "offset") == 0 && strcmp(argv[2], "auto") == 0) {
+        err = sensors_scd4x_offset_auto(msg, len);
+    } else if (argc == 3 && strcmp(sub, "offset") == 0 && strcmp(argv[2], "reset") == 0) {
+        err = sensors_scd4x_offset_reset(msg, len);
+    } else if (argc == 3 && strcmp(sub, "offset") == 0) {
+        err = sensors_scd4x_offset_set(strtof(argv[2], NULL), msg, len);
+    } else if ((argc == 3 || argc == 4) && strcmp(sub, "frc") == 0) {
         int ppm = atoi(argv[2]);
         if (ppm < 300 || ppm > 2000) {
             printf("target 300..2000 ppm\n");
+            free(msg);
             return 1;
         }
-        err = sensors_scd4x_frc(ppm, argc == 4 && strcmp(argv[3], "force") == 0, msg, sizeof(msg));
-    } else if (argc == 2 && strcmp(argv[1], "diag") == 0) {
-        err = sensors_scd4x_diag(msg, sizeof(msg));
-    } else if (argc == 2 && strcmp(argv[1], "fresh-air") == 0) {
+        err = sensors_scd4x_frc(ppm, argc == 4 && strcmp(argv[3], "force") == 0, msg, len);
+    } else if (argc == 2 && strcmp(sub, "diag") == 0) {
+        printf("stopping measurement, self test takes 10 s ...\n");
+        err = sensors_scd4x_diag(msg, len);
+    } else if (argc == 2 && (strcmp(sub, "status") == 0)) {
+        free(msg);
+        char *a[] = {"sensor", "scd41"};
+        return cmd_sensor_show(2, a);
+    } else if (argc == 2 && strcmp(sub, "single") == 0) {
+        printf("single shot takes 5 s ...\n");
+        err = sensors_scd4x_single_shot(msg, len);
+    } else if (argc == 2 && strcmp(sub, "reinit") == 0) {
+        err = sensors_scd4x_reinit(false, msg, len);
+    } else if (argc == 2 && strcmp(sub, "sleep-cycle") == 0) {
+        err = sensors_scd4x_reinit(true, msg, len);
+    } else if (argc == 3 && strcmp(sub, "asc") == 0 && (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "off") == 0)) {
+        err = sensors_scd4x_asc(strcmp(argv[2], "on") == 0, msg, len);
+    } else if (argc == 3 && strcmp(sub, "log") == 0 && (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "off") == 0)) {
+        sensors_scd4x_log_raw(strcmp(argv[2], "on") == 0);
+        free(msg);
+        return 0;
+    } else if (strcmp(sub, "factory-reset") == 0) {
+        if (argc != 3 || strcmp(argv[2], "yes") != 0) {
+            printf("Erases ALL calibration of the sensor (every FRC, the ASC history) and its EEPROM settings,\n"
+                   "back to the state from the factory. Cannot be undone. Type: scd41 factory-reset yes\n");
+            free(msg);
+            return 1;
+        }
+        err = sensors_scd4x_factory_reset(msg, len);
+    } else if (argc == 2 && strcmp(sub, "fresh-air") == 0) {
         err = sensors_scd4x_fresh_air_start();
-        strlcpy(msg, err == ESP_OK ? "started, progress on the display" : esp_err_to_name(err), sizeof(msg));
+        strlcpy(msg, err == ESP_OK ? "started, progress on the display" : esp_err_to_name(err), len);
     } else {
         printf("usage:\n"
+               "  scd41 status              detail page (offset, calibration, fresh air)\n"
+               "  scd41 diag                serial, variant, ASC, offset, altitude, pressure, last raw\n"
+               "                            reading, 10 s self test (changes nothing)\n"
+               "  scd41 single              one single-shot measurement (5 s), outside periodic mode\n"
+               "  scd41 log on|off          print every raw reading (also with 'log off')\n"
+               "  scd41 reinit              reload the sensor settings from its EEPROM\n"
+               "  scd41 sleep-cycle         power_down + wake_up (software power cycle)\n"
+               "  scd41 asc on|off          automatic self-calibration (RAM only)\n"
                "  scd41 offset auto         temperature offset against the SHT4x (needs 2 min of readings)\n"
                "  scd41 offset <C>          set the temperature offset\n"
                "  scd41 offset reset        forget it, use the sensor's EEPROM value\n"
                "  scd41 frc <ppm> [force]   forced recalibration; refused unless CO2 was stable for 3 min\n"
                "                            and within 150 ppm of <ppm> ([force] skips the checks)\n"
-               "  scd41 diag                ASC state, offset, 10 s self test (no calibration change)\n"
-               "  scd41 fresh-air           same as a long press on BOOT: FRC to 'set co2 outdoor' once stable\n");
+               "  scd41 fresh-air           same as a long press on BOOT: FRC to 'set co2 outdoor' once stable\n"
+               "  scd41 factory-reset yes   erase all calibration (FRC, ASC history) - irreversible\n");
+        free(msg);
         return 1;
     }
     printf("%s\n", msg);
+    free(msg);
     return err == ESP_OK ? 0 : 1;
 }
 
-static int cmd_sensor(int argc, char **argv)
+static int cmd_sensor_show(int argc, char **argv)
 {
     sensor_info_t si[SENSORS_MAX];
     int n = sensors_list(si, SENSORS_MAX);
@@ -427,6 +471,11 @@ static int cmd_sensor(int argc, char **argv)
         printf("%s (%s at 0x%02x): %s\n", si[i].name, si[i].model, si[i].addr, si[i].info);
         char *buf = malloc(1024);
         if (buf && sensors_detail(i, buf, 1024)) {
+            for (char *p = buf; *p; p++) {
+                if (*p == '\f') {
+                    *p = '\n';   // columns on the display, one after the other here
+                }
+            }
             printf("%s\n", buf);
         }
         free(buf);
@@ -482,8 +531,8 @@ esp_err_t console_cmds_start(void)
         {.command = "i2c", .help = "i2c scan", .func = cmd_i2c},
         {.command = "onewire", .help = "onewire scan|list|name|forget|names|selftest", .func = cmd_onewire},
         {.command = "led", .help = "led on|off", .func = cmd_led},
-        {.command = "sensor", .help = "sensor [name]: driver details (as on the display page)", .func = cmd_sensor},
-        {.command = "scd41", .help = "scd41 offset|frc|fresh-air ...", .func = cmd_scd41},
+        {.command = "sensor", .help = "sensor [name]: driver details (as on the display page)", .func = cmd_sensor_show},
+        {.command = "scd41", .help = "scd41 status|diag|single|log|reinit|sleep-cycle|asc|offset|frc|fresh-air|factory-reset", .func = cmd_scd41},
         {.command = "version", .help = "firmware version", .func = cmd_version},
         {.command = "log", .help = "log on|off", .func = cmd_log},
     };
