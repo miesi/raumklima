@@ -186,9 +186,11 @@ has two controllers).
   a) 3.3 V from the header: CO2 0 ppm from the first reading on (11 of 11 in 60 s);
   b) own supply, 2 alkaline cells 2.74 V, common GND: 23 of 23 readings 0 ppm in 120 s,
      self test 0x0004, single shot 0 ppm; T and RH plausible in all cases.
-  Conclusion: hub, wiring, other sensors and the shared 3.3 V rail are ruled out; the sensor is
-  very likely defective. Not fully excluded: supply sag of the cells under the 175-205 mA peak
-  (no oscilloscope). PIM587 has its own I2C pull-ups to its supply (bus 2 idle 1/1).
+  Correction (same evening): Thomas' multimeter showed the cells dropping 2.74 -> 2.70 V every
+  few seconds, i.e. with each measurement. A multimeter averages; the real dip during the
+  175-205 mA peak is larger, likely above Sensirion's 30 mV limit. So test b) does not separate
+  "supply" from "sensor". Ruled out: hub, wiring, the other sensors. Open: supply vs. sensor.
+  Next: a clean 3.3 V from a separate LDO (with its own input), common GND. PIM587 has its own I2C pull-ups to its supply (bus 2 idle 1/1).
   Note: with 3 cells (4.23 V) and common GND the pull-ups would put SDA/SCL above the ESP32-S3
   GPIO limit - only supplies <= 3.3 V for a sensor on these pins.
 - Second I2C bus (IO15/IO16, header pins 3 and 18) to run the SCD41 apart from the other
