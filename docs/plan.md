@@ -9,7 +9,8 @@ Open: visual check of the panel (orientation, seam), key test, NTP fallback test
 - Graphics: LVGL 9, 1 bpp rendering, full-frame render (`LV_DISPLAY_RENDER_MODE_FULL`).
 - Pages switched with the rotary switch: overview, network, one page per sensor, system.
 - Display refresh once per minute; time without seconds, uptime in minutes.
-- Time zone shown as "UTC" (strftime `%Z` of the POSIX TZ `UTC0`).
+- Time zone: CET/CEST (`CET-1CEST,M3.5.0,M10.5.0/3`, changed 2026-11-17 from UTC), shown as
+  `%Z`; ISO offset on the time page.
 - IPv6: link-local filtered out, at most 2 addresses shown, "+" if there are more.
 - WLAN: WPA2/WPA3 personal only. Build-time defaults from the git-ignored `wlan.config`.
 - BME680 with BSEC2 now; BSEC binaries fetched at build time, never committed.
@@ -243,7 +244,7 @@ Until OTA exists, `ota_0` is flashed over USB like a factory partition.
 | `show config` | NVS settings, WLAN key masked |
 | `set wifi <ssid> <psk>` | WLAN credentials - missing from the spec, needed for v1 |
 | `set hostname <name>` | |
-| `set tz <posix>` | default `UTC0` |
+| `set tz <posix>` | default `CET-1CEST,M3.5.0,M10.5.0/3` |
 | `set ntp <server> [<server>]` / `set ntp dhcp` | override / back to DHCP + fallback |
 | `i2c scan` | addresses on the bus |
 | `sensors` / `sensors rescan` | detected sensors and last values |
