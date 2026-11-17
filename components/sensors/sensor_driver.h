@@ -1,5 +1,6 @@
 // Interface every sensor driver implements. Adding a sensor = new file in drivers/ plus
-// one line in the registry in sensors.c.
+// one line in the registry in sensors.c. A sensor with its own procedures (calibration, sub-devices)
+// also exports sensors_<name>_* functions in sensors.h - see "Architecture rules" in CLAUDE.md.
 #pragma once
 
 #include <stdbool.h>
