@@ -105,6 +105,7 @@ typedef struct {
     // T_scd - T_ref running mean
     float diff_sum;
     int diff_n;
+    float eeprom_offset_c;   // the sensor's own value, read while offset_c is NAN; NAN = unknown
     // persistent
     float offset_c;
     uint16_t outdoor_ppm;
@@ -212,6 +213,7 @@ static void nvs_load(void)
     s_c.outdoor_ppm = 430;   // NOAA Mauna Loa, June 2026: 431.44 ppm (spec); rounded down
     s_c.health_min = HEALTH_DEFAULT_MIN;
     s_c.offset_c = NAN;      // NAN = never calibrated, keep the sensor's own value
+    s_c.eeprom_offset_c = NAN;
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         return;
@@ -516,6 +518,7 @@ static void handle_request(sensor_inst_t *s)
         s_c.diff_n = 0;
         float cur = NAN;
         read_offset(s, &cur);
+        s_c.eeprom_offset_c = cur;
         reapply_settings(s);   // ASC target = outdoor value
         start_periodic(s);
         ESP_LOGW(TAG, "factory reset: %s", esp_err_to_name(err));
@@ -541,6 +544,7 @@ static void handle_request(sensor_inst_t *s)
         vTaskDelay(pdMS_TO_TICKS(30));
         float cur = NAN;
         read_offset(s, &cur);
+        s_c.eeprom_offset_c = cur;
         send_word(s, CMD_SET_ASC_TARGET, s_c.outdoor_ppm);   // reinit reloaded the EEPROM value too
         vTaskDelay(pdMS_TO_TICKS(2));
         start_periodic(s);
@@ -738,7 +742,8 @@ static esp_err_t probe(sensor_inst_t *s)
         float cur = NAN;
         read_offset(s, &cur);
         s_c.offset_c = NAN;
-        ESP_LOGI(TAG, "temperature offset %.2f C (sensor), not calibrated - 'scd41 offset auto'", cur);
+        s_c.eeprom_offset_c = cur;
+        ESP_LOGI(TAG, "temperature offset %.2f C (sensor), not adjusted - 'scd41 offset auto'", cur);
     }
     esp_err_t err = send_word(s, CMD_SET_ASC_TARGET, s_c.outdoor_ppm);
     vTaskDelay(pdMS_TO_TICKS(2));
@@ -965,7 +970,13 @@ static void detail(sensor_inst_t *s, char *buf, size_t len)
         ADD("Humidity     %.0f %% (internal)\n", m.value);
     }
     if (isnan(s_c.offset_c)) {
-        ADD("T offset     not calibrated\n");
+        // no own value: the sensor uses its EEPROM value, 4.00 C from the factory (datasheet)
+        if (isnan(s_c.eeprom_offset_c)) {
+            ADD("T offset     sensor value, not adjusted\n");
+        } else {
+            ADD("T offset     %.2f \xc2\xb0" "C (%s, not adjusted)\n", s_c.eeprom_offset_c,
+                fabsf(s_c.eeprom_offset_c - 4.0f) < 0.005f ? "factory" : "sensor EEPROM");
+        }
     } else {
         ADD("T offset     %.2f \xc2\xb0" "C\n", s_c.offset_c);
     }
