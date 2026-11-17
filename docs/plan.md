@@ -15,6 +15,9 @@ Open: visual check of the panel (orientation, seam), key test, NTP fallback test
 - BME680 with BSEC2 now; BSEC binaries fetched at build time, never committed.
 - BME680/BME690 are never used together, same for SHT40/SHT45 (SHT45 if the budget allows).
   BME680, BME688 and BME690 are told apart by the variant ID register 0xF0.
+- 2026-11-17: NTP fallback is the DNS name `ntp.1und1.de` instead of the address literals
+  212.227.123.5 and 2001:8d8:fe:123::5 from the spec: a public firmware must not pin an
+  operator's server address. Consequence: the fallback needs DNS from DHCP.
 
 ## Why
 
@@ -36,8 +39,8 @@ On the CrowPanel 5.79", show on the e-paper:
 - IPv6 address (SLAAC; global and link-local)
 - uptime
 
-Time: SNTP. NTP servers from DHCP option 42; without option 42 use 212.227.123.5 and
-2001:8d8:fe:123::5. A server set on the console overrides both (as in the spec).
+Time: SNTP. NTP servers from DHCP option 42; without option 42 use `ntp.1und1.de`.
+A server set on the console overrides both (as in the spec).
 
 Configuration: serial console on UART0 (CH340C), values stored in NVS.
 
@@ -156,8 +159,8 @@ has two controllers).
 
 ### Time
 
-- `esp_netif_sntp` with `CONFIG_LWIP_DHCP_GET_NTP_SRV=y`. Fallback servers 212.227.123.5 and
-  2001:8d8:fe:123::5 as configured entries; DHCP option 42 replaces them when present.
+- `esp_netif_sntp` with `CONFIG_LWIP_DHCP_GET_NTP_SRV=y`. Fallback `ntp.1und1.de` as the configured
+  entry; DHCP option 42 replaces it when present.
   The exact replace semantics of lwIP must be tested with and without option 42 (test 3 below).
 - `TZ` from NVS, default `UTC0` (the POSIX string for UTC).
 - The UI shows "not synced" until the first sync; no fake 1970 time on screen.
@@ -213,7 +216,7 @@ Each milestone ends with a test on the device that a third person can repeat.
 2. **M1 - network.** `set wifi`, DHCP with hostname, SLAAC.
    Test: hostname visible in the FritzBox lease list; `ping` IPv4 and IPv6 from the Mac;
    `show status` addresses match the router.
-3. **M2 - time.** Test A: DHCP without option 42 -> server 212.227.123.5 or 2001:8d8:fe:123::5
+3. **M2 - time.** Test A: DHCP without option 42 -> server `ntp.1und1.de`
    in `show status`. Test B: with option 42 -> that server. Test C: `set ntp` overrides both.
    Clock compared with `date -u` on the Mac, deviation < 1 s.
 4. **M3 - sensors.** `i2c scan` shows BH1750 and BME680; `sensors` shows plausible values

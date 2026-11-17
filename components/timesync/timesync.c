@@ -51,7 +51,7 @@ esp_err_t timesync_apply(void)
         s_inited = false;
     }
 
-    esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(TIMESYNC_FALLBACK_V4);
+    esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(TIMESYNC_FALLBACK);
     cfg.sync_cb = on_sync;
     cfg.start = true;
     if (c.ntp[0][0]) {
@@ -66,15 +66,14 @@ esp_err_t timesync_apply(void)
             cfg.servers[1] = s_servers[1];
         }
     } else {
-        // Fallback servers in slots 0 and 1. If the DHCP ACK carries option 42, lwIP puts those
-        // servers in slots 0..n-1 and clears the rest (lwIP sntp.c dhcp_set_ntp_servers()).
+        // Fallback name in slot 0. If the DHCP ACK carries option 42, lwIP puts those servers
+        // in slots 0..n-1 and clears the rest (lwIP sntp.c dhcp_set_ntp_servers()).
         // Without option 42 the fallback stays. We re-apply on every disconnect, so a new
         // lease without option 42 falls back again.
         s_from_config = false;
         cfg.server_from_dhcp = true;
-        cfg.num_of_servers = 2;
-        cfg.servers[0] = TIMESYNC_FALLBACK_V4;
-        cfg.servers[1] = TIMESYNC_FALLBACK_V6;
+        cfg.num_of_servers = 1;
+        cfg.servers[0] = TIMESYNC_FALLBACK;
     }
     esp_err_t err = esp_netif_sntp_init(&cfg);
     if (err == ESP_OK) {

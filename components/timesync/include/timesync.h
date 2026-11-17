@@ -10,8 +10,10 @@
 extern "C" {
 #endif
 
-#define TIMESYNC_FALLBACK_V4 "212.227.123.5"
-#define TIMESYNC_FALLBACK_V6 "2001:8d8:fe:123::5"
+// Fallback without DHCP option 42: a DNS name, not an address, so the operator can move it.
+// lwIP resolves it on every request, IPv4 first, IPv6 if there is no A record
+// (LWIP_DNS_ADDRTYPE_DEFAULT). Needs a working DNS server from DHCP.
+#define TIMESYNC_FALLBACK "ntp.1und1.de"
 #define TIMESYNC_SLOTS 3
 
 typedef enum {

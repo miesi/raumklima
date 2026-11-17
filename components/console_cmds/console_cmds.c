@@ -146,7 +146,7 @@ static void show_config(void)
     if (c.ntp[0][0]) {
         printf("ntp        %s %s\n", c.ntp[0], c.ntp[1]);
     } else {
-        printf("ntp        dhcp (fallback %s %s)\n", TIMESYNC_FALLBACK_V4, TIMESYNC_FALLBACK_V6);
+        printf("ntp        dhcp (fallback %s)\n", TIMESYNC_FALLBACK);
     }
     printf("%s\n", appcfg_dirty() ? "UNSAVED changes - 'save' to keep them" : "saved");
 }

@@ -95,7 +95,7 @@ for more than 20 s, a "NETWORK DOWN" overlay appears.
 ## Network and time defaults
 
 - IPv4 via DHCP (hostname sent as option 12), IPv6 via SLAAC.
-- NTP servers from DHCP option 42; without it 212.227.123.5 and 2001:8d8:fe:123::5.
+- NTP servers from DHCP option 42; without it `ntp.1und1.de` (needs DNS from DHCP).
   `set ntp` overrides both.
 - Time zone `UTC0` (POSIX TZ string), changeable with `set tz`.
 

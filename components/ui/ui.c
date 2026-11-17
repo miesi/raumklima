@@ -390,8 +390,7 @@ static void page_time(char *c0, size_t l0, char *c1, size_t l1)
             snprintf(c1 + strlen(c1), l1 - strlen(c1), "Server %d  %s\n  reach 0x%02x\n", i, t.server[i], t.reach[i]);
         }
     }
-    snprintf(c1 + strlen(c1), l1 - strlen(c1), "Fallback %s\n         %s", TIMESYNC_FALLBACK_V4,
-             TIMESYNC_FALLBACK_V6);
+    snprintf(c1 + strlen(c1), l1 - strlen(c1), "Fallback %s", TIMESYNC_FALLBACK);
 }
 
 typedef struct {
