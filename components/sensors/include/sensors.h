@@ -74,6 +74,7 @@ esp_err_t sensors_scd4x_fresh_air_start(void);
 bool sensors_scd4x_calibration_age(int *days);
 
 // Saves driver state that must survive a reboot (BSEC). Call before a planned restart.
+// Waits until no driver is polled (sensors_bus_lock()), up to ~11 s during 'scd41 diag'.
 void sensors_save_state(void);
 
 #ifdef __cplusplus

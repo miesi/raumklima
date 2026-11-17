@@ -209,11 +209,15 @@ int sensors_list(sensor_info_t *out, int max)
 
 void sensors_save_state(void)
 {
+    // Called from the console: hold the poll lock so save_state() never runs while the sensors
+    // task is inside the same driver (BSEC is not reentrant).
+    sensors_bus_lock();
     for (int i = 0; i < s_n; i++) {
         if (s_inst[i].supported && s_inst[i].drv->save_state) {
             s_inst[i].drv->save_state(&s_inst[i]);
         }
     }
+    sensors_bus_unlock();
 }
 
 void sensors_bus_lock(void)
