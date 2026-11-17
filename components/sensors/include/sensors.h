@@ -67,7 +67,8 @@ esp_err_t sensors_scd4x_offset_reset(char *msg, size_t len);
 esp_err_t sensors_scd4x_diag(char *msg, size_t len);               // settings + 10 s self test        // back to the sensor's EEPROM value
 esp_err_t sensors_scd4x_frc(uint16_t ppm, bool force, char *msg, size_t len);
 esp_err_t sensors_scd4x_set_outdoor(uint16_t ppm);                   // 380..500, NVS
-// "I am in fresh air": waits for stable CO2 (max 30 min), then FRC to the outdoor value.
+// "I am in fresh air": counts only readings from now on, waits until they were stable for 3 min
+// (max 30 min), then FRC to the outdoor value unless the mean is more than 150 ppm away from it.
 esp_err_t sensors_scd4x_fresh_air_start(void);
 // Days since the last FRC; false if never or no SCD4x.
 bool sensors_scd4x_calibration_age(int *days);

@@ -9,6 +9,9 @@
 // - Forced recalibration (FRC): console "scd41 frc <ppm>" or a long press on BOOT ("I am in
 //   fresh air", target = "set co2 outdoor", default 430 ppm). Requires 3 min of periodic
 //   operation in constant air; the firmware checks that CO2 was stable and refuses otherwise.
+//   It also refuses a target more than FRC_MAX_DIFF_PPM away from the measured mean, so a
+//   fresh-air calibration cannot run on indoor air. "force" skips all checks.
+// - The fresh-air session counts only readings taken after the key press.
 // - ASC target = outdoor value, set at boot (factory default 400 ppm).
 // - Fresh-air hint: no CO2 reading below 450 ppm for more than 156 h (the ASC standard period)
 //   gives a warning on the display.
@@ -53,6 +56,7 @@ static const char *TAG = "scd4x";
 #define FRC_MIN_RUN_US       (3LL * 60 * 1000 * 1000)   // Sensirion: >= 3 min periodic operation
 #define STABLE_WINDOW        36                          // samples = 3 min at 5 s
 #define STABLE_MAX_SPAN_PPM  40                          // ASSUMPTION: our threshold for "constant"
+#define FRC_MAX_DIFF_PPM     150                         // ASSUMPTION: our limit, Sensirion gives none
 #define SESSION_TIMEOUT_US   (30LL * 60 * 1000 * 1000)   // fresh-air session gives up after 30 min
 #define FRESH_PPM            450
 #define CO2_PLAUSIBLE_MIN    300   // below any real air (outdoor ~430): sensor problem, not data
@@ -89,10 +93,11 @@ typedef struct {
     float req_arg;
     esp_err_t req_err;
     char req_msg[200];
-    // fresh-air session (BOOT long press)
+    // fresh-air session (BOOT long press); started in the sensors task, see poll()
+    volatile bool session_req;
     bool session;
     int64_t session_start_us;
-    char session_msg[64];
+    char session_msg[80];           // = sizeof(sensor_inst_t.warn), shown on the overview
     int64_t session_msg_until_us;
     bool asc_target_ok;
     uint32_t implausible;           // consecutive readings below CO2_PLAUSIBLE_MIN
@@ -273,12 +278,33 @@ static bool co2_stable(int *span_out)
     return hi - lo <= STABLE_MAX_SPAN_PPM;
 }
 
+// mean of the readings in the stability window (filled from index 0 after a reset)
+static bool co2_mean(float *mean)
+{
+    if (s_c.n_co2 == 0) {
+        return false;
+    }
+    uint32_t sum = 0;
+    for (int i = 0; i < s_c.n_co2; i++) {
+        sum += s_c.co2[i];
+    }
+    *mean = (float)sum / s_c.n_co2;
+    return true;
+}
+
 // FRC with checks; runs in the sensors task
 static esp_err_t frc_checked(sensor_inst_t *s, uint16_t target, bool force, char *msg, size_t len)
 {
     int64_t now = esp_timer_get_time();
     int span;
     bool stable = co2_stable(&span);
+    float mean;
+    // first, so it also applies to a partly filled window; the checks below still require 3 min
+    if (!force && co2_mean(&mean) && fabsf(target - mean) > FRC_MAX_DIFF_PPM) {
+        snprintf(msg, len, "rejected: %.0f ppm measured, target %u ppm (max diff %d)", mean, target,
+                 FRC_MAX_DIFF_PPM);
+        return ESP_ERR_INVALID_ARG;
+    }
     if (!force && now - s_c.started_us < FRC_MIN_RUN_US) {
         snprintf(msg, len, "rejected: sensor running %lld s, needs 180 s", (long long)((now - s_c.started_us) / 1000000));
         return ESP_ERR_INVALID_STATE;
@@ -484,7 +510,12 @@ static void update_warn(sensor_inst_t *s, int64_t now_us)
         int span;
         co2_stable(&span);
         int el = (now_us - s_c.session_start_us) / 1000000;
-        snprintf(w, sizeof(w), "fresh-air cal.: %d:%02d, span %d ppm", el / 60, el % 60, span < 0 ? 0 : span);
+        if (span < 0) {
+            snprintf(w, sizeof(w), "fresh-air cal.: %d:%02d, readings %d/%d", el / 60, el % 60, s_c.n_co2,
+                     STABLE_WINDOW);
+        } else {
+            snprintf(w, sizeof(w), "fresh-air cal.: %d:%02d, span %d ppm", el / 60, el % 60, span);
+        }
     } else if (s_c.session_msg[0] && now_us < s_c.session_msg_until_us) {
         strlcpy(w, s_c.session_msg, sizeof(w));
     } else if (now && s_c.fresh_utc && now - s_c.fresh_utc > FRESH_WARN_H * 3600) {
@@ -501,6 +532,18 @@ static void update_warn(sensor_inst_t *s, int64_t now_us)
 static int64_t poll(sensor_inst_t *s, int64_t now_us)
 {
     handle_request(s);
+
+    if (s_c.session_req) {
+        // Only readings from now on count: the window may hold minutes of stable indoor air,
+        // and the device may be carried outside only after the key press.
+        s_c.session_req = false;
+        s_c.n_co2 = s_c.i_co2 = 0;
+        s_c.session_start_us = now_us;
+        s_c.session_msg[0] = '\0';
+        s_c.session = true;
+        ESP_LOGI(TAG, "fresh-air calibration started, target %u ppm: needs %d stable readings (3 min) from now",
+                 s_c.outdoor_ppm, STABLE_WINDOW);
+    }
 
     uint16_t ready;
     if (read_words(s, CMD_DATA_READY, &ready, 1) != ESP_OK) {
@@ -564,9 +607,12 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
     // fresh-air calibration session (BOOT long press)
     if (s_c.session) {
         int span;
-        if (co2_stable(&span) && now_us - s_c.started_us >= FRC_MIN_RUN_US) {
+        if (co2_stable(&span) && now_us - s_c.session_start_us >= FRC_MIN_RUN_US) {
             s_c.session = false;
-            frc_checked(s, s_c.outdoor_ppm, false, s_c.session_msg, sizeof(s_c.session_msg));
+            char m[sizeof(s_c.session_msg) - sizeof("fresh-air: ") + 1];
+            frc_checked(s, s_c.outdoor_ppm, false, m, sizeof(m));
+            snprintf(s_c.session_msg, sizeof(s_c.session_msg), "fresh-air: %s", m);
+            ESP_LOGW(TAG, "%s", s_c.session_msg);
             s_c.session_msg_until_us = now_us + 10LL * 60 * 1000 * 1000;
         } else if (now_us - s_c.session_start_us > SESSION_TIMEOUT_US) {
             s_c.session = false;
@@ -683,10 +729,7 @@ esp_err_t sensors_scd4x_fresh_air_start(void)
     if (!s_c.s) {
         return ESP_ERR_NOT_FOUND;
     }
-    s_c.session_start_us = esp_timer_get_time();
-    s_c.session_msg[0] = '\0';
-    s_c.session = true;
-    ESP_LOGI(TAG, "fresh-air calibration started, target %u ppm, waiting for stable CO2", s_c.outdoor_ppm);
+    s_c.session_req = true;   // the sensors task resets the window and starts the session
     sensors_kick(s_c.s);
     return ESP_OK;
 }

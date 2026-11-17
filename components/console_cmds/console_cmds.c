@@ -403,6 +403,7 @@ static int cmd_scd41(int argc, char **argv)
                "  scd41 offset <C>          set the temperature offset\n"
                "  scd41 offset reset        forget it, use the sensor's EEPROM value\n"
                "  scd41 frc <ppm> [force]   forced recalibration; refused unless CO2 was stable for 3 min\n"
+               "                            and within 150 ppm of <ppm> ([force] skips the checks)\n"
                "  scd41 diag                ASC state, offset, 10 s self test (no calibration change)\n"
                "  scd41 fresh-air           same as a long press on BOOT: FRC to 'set co2 outdoor' once stable\n");
         return 1;

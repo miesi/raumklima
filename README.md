@@ -76,10 +76,13 @@ SCD41 (CO2):
 
 - `scd41 offset auto` - temperature offset against the SHT4x; run it after the device has been
   running for at least 30 min in steady conditions. `scd41 offset reset` undoes it.
-- `scd41 frc <ppm>` - forced recalibration; refused unless the sensor ran 3 min and CO2 was
-  stable (span <= 40 ppm over 3 min). Outdoors use the fresh-air function instead:
-- long press BOOT (or `scd41 fresh-air`): waits up to 30 min for stable CO2, then calibrates
-  to `set co2 outdoor <ppm>` (default 430). Progress and result on the display.
+- `scd41 frc <ppm>` - forced recalibration; refused unless the sensor ran 3 min, CO2 was
+  stable (span <= 40 ppm over 3 min) and the measured mean is within 150 ppm of `<ppm>`.
+  `scd41 frc <ppm> force` skips these checks. Outdoors use the fresh-air function instead:
+- long press BOOT (or `scd41 fresh-air`): counts only readings taken after the press, waits
+  up to 30 min until they were stable for 3 min, then calibrates to `set co2 outdoor <ppm>`
+  (default 430) - or refuses if the measured mean is more than 150 ppm away from it.
+  Progress and result on the display.
 - The display warns when CO2 was not below 450 ppm for more than 156 h.
 
 `led on|off` switches the red LED (off after boot).
