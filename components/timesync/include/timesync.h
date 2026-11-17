@@ -34,8 +34,12 @@ typedef struct {
 // Sets TZ, starts SNTP. Call after netmgr_start().
 esp_err_t timesync_start(void);
 
-// Re-applies TZ and NTP servers from appcfg (after "set tz", "set ntp").
+// Re-applies TZ and NTP servers from appcfg (after "set ntp"). Restarts SNTP: servers learned
+// from DHCP option 42 are gone until the next DHCP ACK (lease renewal or reconnect).
 esp_err_t timesync_apply(void);
+
+// Re-applies only the TZ from appcfg (after "set tz"); SNTP keeps running.
+void timesync_apply_tz(void);
 
 void timesync_get_status(timesync_status_t *out);
 

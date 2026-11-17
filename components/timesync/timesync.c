@@ -37,13 +37,20 @@ static void on_sync(struct timeval *tv)
     esp_event_post(APP_EVENT, APP_EVENT_TIME_SYNCED, NULL, 0, 0);
 }
 
+void timesync_apply_tz(void)
+{
+    appcfg_t c;
+    appcfg_get(&c);
+    setenv("TZ", c.tz, 1);
+    tzset();
+}
+
 esp_err_t timesync_apply(void)
 {
     appcfg_t c;
     appcfg_get(&c);
 
-    setenv("TZ", c.tz, 1);
-    tzset();
+    timesync_apply_tz();
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s_inited) {

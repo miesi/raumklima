@@ -195,7 +195,7 @@ static int cmd_set(int argc, char **argv)
         if (report(appcfg_set_tz(argv[2]), "set tz")) {
             return 1;
         }
-        timesync_apply();
+        timesync_apply_tz();   // display only; SNTP and its DHCP servers stay as they are
         return 0;
     }
     if (argc == 4 && strcmp(argv[1], "co2") == 0 && strcmp(argv[2], "outdoor") == 0) {
@@ -210,6 +210,10 @@ static int cmd_set(int argc, char **argv)
             return 1;
         }
         timesync_apply();
+        if (strcmp(argv[2], "dhcp") == 0) {
+            printf("until the next DHCP ACK (lease renewal or reconnect) the fallback %s is used\n",
+                   TIMESYNC_FALLBACK);
+        }
         return 0;
     }
     printf("usage:\n"
