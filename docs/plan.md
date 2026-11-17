@@ -182,6 +182,15 @@ has two controllers).
   uninterrupted measurement at a time (datasheet 3.7); a check every 30 min stops that.
 - The self test is not a reliable indicator: 2026-11-17 20:46 it returned 0x0000 while the
   sensor was giving 0 ppm readings in between plausible ones.
+- Isolation tests 2026-11-17 evening (SCD41 alone on bus 2, other sensors and hub on bus 1):
+  a) 3.3 V from the header: CO2 0 ppm from the first reading on (11 of 11 in 60 s);
+  b) own supply, 2 alkaline cells 2.74 V, common GND: 23 of 23 readings 0 ppm in 120 s,
+     self test 0x0004, single shot 0 ppm; T and RH plausible in all cases.
+  Conclusion: hub, wiring, other sensors and the shared 3.3 V rail are ruled out; the sensor is
+  very likely defective. Not fully excluded: supply sag of the cells under the 175-205 mA peak
+  (no oscilloscope). PIM587 has its own I2C pull-ups to its supply (bus 2 idle 1/1).
+  Note: with 3 cells (4.23 V) and common GND the pull-ups would put SDA/SCL above the ESP32-S3
+  GPIO limit - only supplies <= 3.3 V for a sensor on these pins.
 - Second I2C bus (IO15/IO16, header pins 3 and 18) to run the SCD41 apart from the other
   sensors and the hub. Sensors are probed on both buses; duplicate instance names get "_2";
   SCD4x and DS2484 are single-instance (a second one is reported, not driven).

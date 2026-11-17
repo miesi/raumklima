@@ -272,15 +272,10 @@ static void page_overview(int page, int count)
         } else {
             strlcpy(b, "--", sizeof(b));
         }
-    } else if (have_scd) {
-        // no BSEC estimate as a stand-in: it is not a CO2 measurement (2200 ppm seen indoors)
-        set_text(s_tile_cap[4], "CO2 (SCD41 fault)");
-        strlcpy(b, "--", sizeof(b));
-    } else if (metrics_get_primary("co2eq_ppm", &m)) {
-        set_text(s_tile_cap[4], "CO2 eq. (BSEC est.)");
-        snprintf(b, sizeof(b), "%.0f ppm", m.value);
     } else {
-        set_text(s_tile_cap[4], have_scd ? "CO2 (SCD41 fault)" : "CO2");
+        // Never the BSEC "CO2 equivalent" here (Thomas, 2026-11-17): it is an estimate from VOCs,
+        // not a CO2 measurement (2200 ppm seen indoors). Only a CO2 sensor feeds this tile.
+        set_text(s_tile_cap[4], have_scd ? "CO2 (SCD41 fault)" : "CO2 (no sensor)");
         strlcpy(b, "--", sizeof(b));
     }
     set_text(s_tile_val[4], b);

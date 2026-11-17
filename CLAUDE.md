@@ -50,6 +50,8 @@ GitHub - everything committed must be fit for that (no secrets, no unlicensed th
   settable on the console. Compile-time values are defaults only.
 - Limits (`CONFIG_HUB_SENSORS_MAX`, `CONFIG_HUB_METRICS_MAX`, `OW_MAX_DEVICES`) are enforced
   with an error message and the first devices found keep working - never a silent truncation.
+- The overview CO2 tile shows only a real CO2 sensor (SCD4x). Never fall back to the BSEC
+  `co2eq_ppm` estimate there, in no case (no sensor, fault, boot) - Thomas' explicit decision.
 - Board pins only in `components/board/`. Nothing else hard-codes a GPIO number.
 - Timestamps sent off-device are UTC; TZ is for display only.
 
