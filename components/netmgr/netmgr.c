@@ -11,6 +11,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "lwip/ip6_addr.h"
+#include "lwip/ip_addr.h"
+#include "lwip/netdb.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "netmgr";
@@ -224,4 +226,129 @@ void netmgr_ip6_str(const esp_ip6_addr_t *a, char *buf, size_t len)
     ip.zone = 0;
 #endif
     ip6addr_ntoa_r(&ip, buf, (int)len);
+}
+
+esp_err_t netmgr_radio(bool on)
+{
+    if (on) {
+        s_stopping = false;
+        s_backoff_ms = 1000;
+        return esp_wifi_start();   // STA_START connects
+    }
+    s_stopping = true;   // no reconnect attempts while off
+    esp_timer_stop(s_retry_timer);
+    return esp_wifi_stop();
+}
+
+// --- DNS watch ---
+
+#define DNS_EVERY_MS (5 * 60 * 1000)
+
+static netmgr_dns_result_t s_dns[NETMGR_DNS_WATCH_MAX];
+static int s_dns_n;
+static SemaphoreHandle_t s_dns_lock;
+static TaskHandle_t s_dns_task;
+
+static void dns_task(void *arg)
+{
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(DNS_EVERY_MS));
+        netmgr_status_t st;
+        netmgr_get_status(&st);
+        if (!st.has_ip4 && st.n_ip6 == 0) {
+            continue;   // no network: nothing to say about DNS
+        }
+        for (int i = 0; i < NETMGR_DNS_WATCH_MAX; i++) {
+            char name[64];
+            xSemaphoreTake(s_dns_lock, portMAX_DELAY);
+            bool have = i < s_dns_n;
+            if (have) {
+                strlcpy(name, s_dns[i].name, sizeof(name));
+            }
+            xSemaphoreGive(s_dns_lock);
+            if (!have) {
+                break;
+            }
+            struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_DGRAM};
+            struct addrinfo *res = NULL;
+            int rc = getaddrinfo(name, NULL, &hints, &res);   // blocking, therefore its own task
+            char addr[48] = "";
+            if (rc == 0 && res) {
+                if (res->ai_family == AF_INET) {
+                    inet_ntop(AF_INET, &((struct sockaddr_in *)res->ai_addr)->sin_addr, addr, sizeof(addr));
+                } else if (res->ai_family == AF_INET6) {
+                    inet_ntop(AF_INET6, &((struct sockaddr_in6 *)res->ai_addr)->sin6_addr, addr, sizeof(addr));
+                }
+            }
+            if (res) {
+                freeaddrinfo(res);
+            }
+            xSemaphoreTake(s_dns_lock, portMAX_DELAY);
+            if (i < s_dns_n && strcmp(s_dns[i].name, name) == 0) {
+                bool was_ok = s_dns[i].ok, was = s_dns[i].checked;
+                s_dns[i].checked = true;
+                s_dns[i].ok = rc == 0;
+                s_dns[i].err = rc;
+                strlcpy(s_dns[i].addr, addr, sizeof(s_dns[i].addr));
+                s_dns[i].when_us = esp_timer_get_time();
+                if (!was || was_ok != (rc == 0)) {
+                    if (rc == 0) {
+                        ESP_LOGI(TAG, "DNS %s %s -> %s", s_dns[i].label, name, addr);
+                    } else {
+                        ESP_LOGW(TAG, "DNS %s %s does not resolve (getaddrinfo %d)", s_dns[i].label, name, rc);
+                    }
+                }
+            }
+            xSemaphoreGive(s_dns_lock);
+        }
+    }
+}
+
+static void dns_kick(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    if (s_dns_task) {
+        xTaskNotifyGive(s_dns_task);
+    }
+}
+
+void netmgr_dns_watch(const char *label, const char *const *names, int n)
+{
+    if (!s_dns_lock) {
+        s_dns_lock = xSemaphoreCreateMutex();
+        xTaskCreate(dns_task, "dnswatch", 4096, NULL, 2, &s_dns_task);
+        esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, dns_kick, NULL);
+        esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6, dns_kick, NULL);
+    }
+    xSemaphoreTake(s_dns_lock, portMAX_DELAY);
+    int k = 0;
+    for (int i = 0; i < s_dns_n; i++) {   // keep the other labels
+        if (strcmp(s_dns[i].label, label) != 0) {
+            s_dns[k++] = s_dns[i];
+        }
+    }
+    s_dns_n = k;
+    for (int i = 0; i < n && s_dns_n < NETMGR_DNS_WATCH_MAX; i++) {
+        ip_addr_t ip;
+        if (!names[i] || !names[i][0] || ipaddr_aton(names[i], &ip)) {
+            continue;   // empty or an IP literal: nothing to resolve
+        }
+        netmgr_dns_result_t *r = &s_dns[s_dns_n++];
+        memset(r, 0, sizeof(*r));
+        strlcpy(r->label, label, sizeof(r->label));
+        strlcpy(r->name, names[i], sizeof(r->name));
+    }
+    xSemaphoreGive(s_dns_lock);
+    xTaskNotifyGive(s_dns_task);
+}
+
+int netmgr_dns_results(netmgr_dns_result_t *out, int max)
+{
+    if (!s_dns_lock) {
+        return 0;
+    }
+    xSemaphoreTake(s_dns_lock, portMAX_DELAY);
+    int n = s_dns_n < max ? s_dns_n : max;
+    memcpy(out, s_dns, n * sizeof(*out));
+    xSemaphoreGive(s_dns_lock);
+    return n;
 }

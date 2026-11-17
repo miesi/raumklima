@@ -84,6 +84,9 @@ SCD41 (CO2):
   (default 430) - or refuses if the measured mean is more than 150 ppm away from it.
   Progress and result on the display.
 - The display warns when CO2 was not below 450 ppm for more than 156 h.
+- Health check: self test every 30 min (`scd41 health <min>`, 0 = only after implausible
+  readings), on failure power_down/wake_up and a second self test; `scd41 health` shows the log.
+  Each check stops the measurement for 11-23 s (see the ASC note in docs/plan.md).
 - Debugging: `scd41 status`, `scd41 diag` (settings + built-in self test), `scd41 single`,
   `scd41 log on|off`, `scd41 reinit`, `scd41 sleep-cycle`, `scd41 asc on|off`.
 - `scd41 factory-reset yes` erases every calibration of the sensor - irreversible.
@@ -96,7 +99,11 @@ relative to the last ~4 days). Accuracy 0..3: 0 run-in, 3 calibrated (Bosch BSEC
 Guide). BSEC saves its learning state every 4 h and on `reboot`; a reset or reflash in between
 loses up to 4 h of learning.
 
-`led on|off` switches the red LED (off after boot).
+`led on|off` switches the red LED (off after boot). `wifi off|on` switches the radio (debug).
+
+Warnings on the overview: condensation risk when any measured temperature is within 1 K of the
+dew point computed from the SHT4x; sensor limits; SCD41 faults; ventilation hint.
+The network page shows whether the configured host names (NTP) resolve.
 
 ## Display and keys
 
@@ -111,7 +118,9 @@ for more than 20 s, a "NETWORK DOWN" overlay appears.
 - IPv4 via DHCP (hostname sent as option 12), IPv6 via SLAAC.
 - NTP servers from DHCP option 42; without it `ntp.1und1.de` (needs DNS from DHCP).
   `set ntp` overrides both.
-- Time zone `UTC0` (POSIX TZ string), changeable with `set tz`.
+- Time zone `CET-1CEST,M3.5.0,M10.5.0/3` (CET/CEST, EU summer time rule). `show tz` prints the
+  next switches as the device computes them. A changed rule is a console command
+  (`set tz <posix>`, `save`), not a firmware update.
 
 ## License
 

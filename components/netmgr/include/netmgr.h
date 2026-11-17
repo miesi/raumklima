@@ -40,6 +40,26 @@ esp_err_t netmgr_restart(void);
 
 void netmgr_get_status(netmgr_status_t *out);
 
+// Debug: radio off/on (e.g. to see whether WLAN current peaks disturb a sensor).
+esp_err_t netmgr_radio(bool on);
+
+// --- DNS watch: configured host names (NTP, later the metrics target) are resolved every
+// 5 min and after each new address; failures are shown on the network page.
+#define NETMGR_DNS_WATCH_MAX 4
+typedef struct {
+    char label[8];      // e.g. "NTP"
+    char name[64];
+    bool checked;
+    bool ok;
+    char addr[48];      // first address returned
+    int err;            // getaddrinfo() error when !ok
+    int64_t when_us;
+} netmgr_dns_result_t;
+
+// Replaces the names watched under this label. IP literals are skipped.
+void netmgr_dns_watch(const char *label, const char *const *names, int n);
+int netmgr_dns_results(netmgr_dns_result_t *out, int max);
+
 esp_netif_t *netmgr_netif(void);
 
 // RFC 5952 text form (zero compression), e.g. "2003:e5:6f22:3000::1".

@@ -48,7 +48,9 @@ esp_err_t appcfg_init(void)
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     snprintf(s_cfg.hostname, sizeof(s_cfg.hostname), "hub-%02x%02x%02x", mac[3], mac[4], mac[5]);
-    strlcpy(s_cfg.tz, "UTC0", sizeof(s_cfg.tz));
+    // Central European Time with EU summer time: last Sunday in March 02:00 -> 03:00 local,
+    // last Sunday in October 03:00 -> 02:00 local (POSIX TZ, newlib applies it every year).
+    strlcpy(s_cfg.tz, APPCFG_TZ_DEFAULT, sizeof(s_cfg.tz));
     strlcpy(s_cfg.wifi_ssid, WLAN_DEFAULT_SSID, sizeof(s_cfg.wifi_ssid));
     strlcpy(s_cfg.wifi_psk, WLAN_DEFAULT_PSK, sizeof(s_cfg.wifi_psk));
     s_wifi_from_build = s_cfg.wifi_ssid[0] != '\0';

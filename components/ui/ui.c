@@ -60,6 +60,10 @@ static int s_partials_since_full = UI_FULL_EVERY;   // first frame is a full ref
 static bool s_force_full;
 static int s_page;
 
+#define CO2_BACK_STREAK 12          // plausible SCD4x readings (1 min) before the tile trusts it again
+static bool s_co2_from_scd = true;
+static uint32_t s_co2_faults_seen;
+
 // --- page model ---
 
 // order: overview, network, time, one page per sensor, system (last)
@@ -200,6 +204,7 @@ static void page_overview(int page, int count)
     if (t.synced) {
         fmt_time(b, sizeof(b), "%H:%M", now);
         set_text(s_clock, b);
+        // no ISO offset here: it runs into the pressure tile (time page shows it)
         fmt_time(b, sizeof(b), "%a %Y-%m-%d  %Z", now);
         set_text(s_date, b);
         char last[16];
@@ -240,8 +245,21 @@ static void page_overview(int page, int count)
         strlcpy(b, "--", sizeof(b));
     }
     set_text(s_tile_val[3], b);
-    // 4 CO2: measured (SCD4x), else BSEC estimate
-    if (metrics_get_primary("co2_ppm", &m)) {
+    // 4 CO2: measured (SCD4x) or BSEC estimate. With an SCD4x the tile switches to the
+    // estimate on the first implausible reading and back only after CO2_BACK_STREAK plausible
+    // readings in a row, so a flaky sensor does not make the caption flip every few seconds.
+    scd4x_co2_state_t cs;
+    bool have_scd = sensors_scd4x_co2_state(&cs);
+    if (have_scd) {
+        // any fault since the last update counts, also one the minute snapshot would miss
+        if (cs.faults != s_co2_faults_seen) {
+            s_co2_faults_seen = cs.faults;
+            s_co2_from_scd = false;
+        } else if (!s_co2_from_scd && cs.good_streak >= CO2_BACK_STREAK) {
+            s_co2_from_scd = true;
+        }
+    }
+    if (have_scd && s_co2_from_scd) {
         int days;
         if (sensors_scd4x_calibration_age(&days)) {
             snprintf(b, sizeof(b), "CO2 (calibrated %d d ago)", days);
@@ -249,12 +267,16 @@ static void page_overview(int page, int count)
             strlcpy(b, "CO2 (not calibrated)", sizeof(b));
         }
         set_text(s_tile_cap[4], b);
-        snprintf(b, sizeof(b), "%.0f ppm", m.value);
+        if (metrics_get_primary("co2_ppm", &m)) {
+            snprintf(b, sizeof(b), "%.0f ppm", m.value);
+        } else {
+            strlcpy(b, "--", sizeof(b));
+        }
     } else if (metrics_get_primary("co2eq_ppm", &m)) {
-        set_text(s_tile_cap[4], "CO2 equivalent (BSEC estimate)");
+        set_text(s_tile_cap[4], have_scd ? "CO2 est. BSEC (SCD41 fault)" : "CO2 eq. (BSEC est.)");
         snprintf(b, sizeof(b), "%.0f ppm", m.value);
     } else {
-        set_text(s_tile_cap[4], "CO2");
+        set_text(s_tile_cap[4], have_scd ? "CO2 (SCD41 fault)" : "CO2");
         strlcpy(b, "--", sizeof(b));
     }
     set_text(s_tile_val[4], b);
@@ -365,6 +387,18 @@ static void page_network(char *c0, size_t l0, char *c1, size_t l1)
         netmgr_ip6_str(&n.ip6_ll, a, sizeof(a));
         snprintf(c1 + strlen(c1), l1 - strlen(c1), "%s (link-local)\n", a);
     }
+    // configured host names: resolvable? ("!" = no)
+    netmgr_dns_result_t d[NETMGR_DNS_WATCH_MAX];
+    int nd = netmgr_dns_results(d, NETMGR_DNS_WATCH_MAX);
+    for (int i = 0; i < nd; i++) {
+        if (!d[i].checked) {
+            snprintf(c0 + strlen(c0), l0 - strlen(c0), "\nDNS %s %s: not checked yet", d[i].label, d[i].name);
+        } else if (d[i].ok) {
+            snprintf(c0 + strlen(c0), l0 - strlen(c0), "\nDNS %s %s ok", d[i].label, d[i].name);
+        } else {
+            snprintf(c0 + strlen(c0), l0 - strlen(c0), "\n! DNS %s %s does NOT resolve", d[i].label, d[i].name);
+        }
+    }
 }
 
 static void page_time(char *c0, size_t l0, char *c1, size_t l1)
@@ -375,6 +409,10 @@ static void page_time(char *c0, size_t l0, char *c1, size_t l1)
     time_t now = time(NULL);
     char d[40], last[40];
     fmt_time(d, sizeof(d), "%Y-%m-%d %H:%M %Z", now);
+    char off[8];
+    timesync_iso_offset(now, off, sizeof(off));
+    strlcat(d, " ", sizeof(d));
+    strlcat(d, off, sizeof(d));
     const char *tz = getenv("TZ");
     if (t.synced) {
         fmt_time(last, sizeof(last), "%Y-%m-%d %H:%M:%S", t.last_sync);

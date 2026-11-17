@@ -8,6 +8,7 @@
 extern "C" {
 #endif
 
+#define APPCFG_TZ_DEFAULT "CET-1CEST,M3.5.0,M10.5.0/3"
 #define APPCFG_NTP_MAX 2
 
 typedef struct {

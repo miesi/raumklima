@@ -96,13 +96,28 @@ static void show_status(void)
         printf("ipv6 ll    " IPV6STR "\n", IPV62STR(n.ip6_ll));
     }
 
+    netmgr_dns_result_t dr[NETMGR_DNS_WATCH_MAX];
+    int nd = netmgr_dns_results(dr, NETMGR_DNS_WATCH_MAX);
+    for (int i = 0; i < nd; i++) {
+        if (!dr[i].checked) {
+            printf("dns        %s %s: not checked yet\n", dr[i].label, dr[i].name);
+        } else if (dr[i].ok) {
+            printf("dns        %s %s -> %s\n", dr[i].label, dr[i].name, dr[i].addr);
+        } else {
+            printf("WARNING    DNS %s %s does not resolve (getaddrinfo %d)\n", dr[i].label, dr[i].name, dr[i].err);
+        }
+    }
+
     timesync_status_t t;
     timesync_get_status(&t);
     time_t now = time(NULL);
     struct tm tm;
     localtime_r(&now, &tm);
-    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z", &tm);
-    printf("time       %s%s\n", buf, t.synced ? "" : " (NOT synced)");
+    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+    char off[8], zone[8];
+    timesync_iso_offset(now, off, sizeof(off));
+    strftime(zone, sizeof(zone), "%Z", &tm);
+    printf("time       %s%s %s%s\n", buf, off, zone, t.synced ? "" : " (NOT synced)");
     printf("ntp        source %s, syncs %" PRIu32, timesync_source_name(t.source), t.sync_count);
     if (t.synced) {
         gmtime_r(&t.last_sync, &tm);
@@ -126,7 +141,7 @@ static void show_status(void)
         printf("sensor     0x%02x %-8s as %-8s ok %" PRIu32 " err %" PRIu32 "  %s%s\n", si[i].addr, si[i].model,
                si[i].name, si[i].ok_count, si[i].err_count, si[i].supported ? "" : "NOT SUPPORTED ", si[i].info);
     }
-    char warn[128];
+    char warn[320];
     sensors_warnings(warn, sizeof(warn));
     if (warn[0]) {
         printf("WARNING    %s\n", warn);
@@ -151,14 +166,57 @@ static void show_config(void)
     printf("%s\n", appcfg_dirty() ? "UNSAVED changes - 'save' to keep them" : "saved");
 }
 
+// Next DST transitions as this device computes them (checks the TZ rule, not the clock).
+static void show_tz(void)
+{
+    appcfg_t c;
+    appcfg_get(&c);
+    printf("TZ rule    %s\n", c.tz);
+    time_t t = time(NULL);
+    if (t < 1700000000) {
+        t = 1794787200;   // 2026-11-16 00:00 UTC when the clock is not set yet
+    }
+    t -= t % 3600;
+    struct tm prev, cur;
+    localtime_r(&t, &prev);
+    int found = 0;
+    for (int h = 1; h <= 24 * 800 && found < 4; h++) {
+        time_t u = t + (time_t)h * 3600;
+        localtime_r(&u, &cur);
+        if (cur.tm_isdst != prev.tm_isdst) {
+            time_t before = u - 1;
+            struct tm tb, tu;
+            char a[40], b[40], ob[8], ou[8], ut[24];
+            localtime_r(&before, &tb);
+            gmtime_r(&u, &tu);
+            strftime(ut, sizeof(ut), "%Y-%m-%dT%H:%M:%SZ", &tu);
+            strftime(a, sizeof(a), "%Y-%m-%dT%H:%M:%S", &tb);
+            strftime(b, sizeof(b), "%Y-%m-%dT%H:%M:%S", &cur);
+            timesync_iso_offset(before, ob, sizeof(ob));
+            timesync_iso_offset(u, ou, sizeof(ou));
+            char zb[8], zc[8];
+            strftime(zb, sizeof(zb), "%Z", &tb);
+            strftime(zc, sizeof(zc), "%Z", &cur);
+            printf("switch at  %s: %s%s %s -> %s%s %s\n", ut, a, ob, zb, b, ou, zc);
+            found++;
+        }
+        prev = cur;
+    }
+    if (!found) {
+        printf("no DST switch in the next 800 days\n");
+    }
+}
+
 static int cmd_show(int argc, char **argv)
 {
     if (argc < 2 || strcmp(argv[1], "status") == 0) {
         show_status();
     } else if (strcmp(argv[1], "config") == 0) {
         show_config();
+    } else if (strcmp(argv[1], "tz") == 0) {
+        show_tz();
     } else {
-        printf("usage: show status|config\n");
+        printf("usage: show status|config|tz\n");
         return 1;
     }
     return 0;
@@ -411,6 +469,13 @@ static int cmd_scd41(int argc, char **argv)
         free(msg);
         char *a[] = {"sensor", "scd41"};
         return cmd_sensor_show(2, a);
+    } else if (argc == 2 && strcmp(sub, "health") == 0) {
+        sensors_scd4x_health_print();
+        free(msg);
+        return 0;
+    } else if (argc == 3 && strcmp(sub, "health") == 0) {
+        err = sensors_scd4x_health_interval(atoi(argv[2]));
+        strlcpy(msg, err == ESP_OK ? "saved" : "minutes 0..1440", len);
     } else if (argc == 2 && strcmp(sub, "single") == 0) {
         printf("single shot takes 5 s ...\n");
         err = sensors_scd4x_single_shot(msg, len);
@@ -440,6 +505,7 @@ static int cmd_scd41(int argc, char **argv)
                "  scd41 status              detail page (offset, calibration, fresh air)\n"
                "  scd41 diag                serial, variant, ASC, offset, altitude, pressure, last raw\n"
                "                            reading, 10 s self test (changes nothing)\n"
+               "  scd41 health [<min>]      health check log / interval (default 30, 0 = only on faults)\n"
                "  scd41 single              one single-shot measurement (5 s), outside periodic mode\n"
                "  scd41 log on|off          print every raw reading (also with 'log off')\n"
                "  scd41 reinit              reload the sensor settings from its EEPROM\n"
@@ -481,6 +547,17 @@ static int cmd_sensor_show(int argc, char **argv)
         free(buf);
     }
     return 0;
+}
+
+static int cmd_wifi(int argc, char **argv)
+{
+    if (argc == 2 && (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "off") == 0)) {
+        esp_err_t err = netmgr_radio(strcmp(argv[1], "on") == 0);
+        printf("WLAN radio %s: %s\n", argv[1], esp_err_to_name(err));
+        return err == ESP_OK ? 0 : 1;
+    }
+    printf("usage: wifi on|off   (debug: radio off, e.g. to test supply interference)\n");
+    return 1;
 }
 
 static int cmd_led(int argc, char **argv)
@@ -531,6 +608,7 @@ esp_err_t console_cmds_start(void)
         {.command = "i2c", .help = "i2c scan", .func = cmd_i2c},
         {.command = "onewire", .help = "onewire scan|list|name|forget|names|selftest", .func = cmd_onewire},
         {.command = "led", .help = "led on|off", .func = cmd_led},
+        {.command = "wifi", .help = "wifi on|off (debug)", .func = cmd_wifi},
         {.command = "sensor", .help = "sensor [name]: driver details (as on the display page)", .func = cmd_sensor_show},
         {.command = "scd41", .help = "scd41 status|diag|single|log|reinit|sleep-cycle|asc|offset|frc|fresh-air|factory-reset", .func = cmd_scd41},
         {.command = "version", .help = "firmware version", .func = cmd_version},

@@ -72,6 +72,9 @@ static const char *TAG = "scd4x";
 #define FRESH_WARN_H         156
 #define OFFSET_AVG_N         24                          // 2 min of differences for "offset auto"
 #define NVS_NS               "scd4x"
+#define HEALTH_DEFAULT_MIN   30    // self test interval, 'scd41 health <min>' (0 = only on faults)
+#define HEALTH_FAULT_GAP_US  (10LL * 60 * 1000 * 1000)   // fault-triggered checks at most every 10 min
+#define HEALTH_LOG_N         16
 
 static const uint8_t k_addrs[] = {0x62};
 
@@ -124,6 +127,24 @@ typedef struct {
     bool asc_target_ok;
     uint32_t implausible;           // consecutive readings below CO2_PLAUSIBLE_MIN
     bool log_raw;                   // 'scd41 log on': print every raw reading
+    uint32_t good_streak;           // consecutive plausible CO2 readings
+    uint32_t faults_total;          // implausible CO2 readings since boot
+    // health check: self test, on failure power_down/wake_up and a second self test
+    uint16_t health_min;            // interval in minutes, 0 = only after implausible readings
+    int health_state;               // see health_step()
+    bool health_by_fault;
+    int64_t health_next_us;
+    int64_t health_last_fault_check_us;
+    uint16_t health_st1;
+    struct {
+        time_t utc;
+        int64_t mono_us;
+        bool by_fault;
+        uint16_t st1, st2;          // self test results; st2 only after a sleep cycle
+        bool cycled;
+    } hlog[HEALTH_LOG_N];
+    int hlog_n, hlog_i;
+    uint32_t h_tests, h_fails, h_recovered;
     uint16_t last_ready, last_raw[3];
     uint32_t n_readings;
 } ctx_t;
@@ -191,6 +212,7 @@ static esp_err_t start_periodic(sensor_inst_t *s)
 static void nvs_load(void)
 {
     s_c.outdoor_ppm = 430;   // NOAA Mauna Loa, June 2026: 431.44 ppm (spec); rounded down
+    s_c.health_min = HEALTH_DEFAULT_MIN;
     s_c.offset_c = NAN;      // NAN = never calibrated, keep the sensor's own value
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
@@ -218,6 +240,12 @@ static void nvs_load(void)
     if (nvs_get_i64(h, "fresh_utc", &i64) == ESP_OK) {
         s_c.fresh_utc = i64;
     }
+    if (nvs_get_u16(h, "health_min", &u16) == ESP_OK) {
+        s_c.health_min = u16;
+    }
+    nvs_get_u32(h, "h_tests", &s_c.h_tests);
+    nvs_get_u32(h, "h_fails", &s_c.h_fails);
+    nvs_get_u32(h, "h_recov", &s_c.h_recovered);
     nvs_close(h);
 }
 
@@ -237,6 +265,10 @@ static void nvs_save(void)
     nvs_set_u16(h, "frc_tgt", s_c.frc_target);
     nvs_set_i16(h, "frc_corr", s_c.frc_correction);
     nvs_set_i64(h, "fresh_utc", s_c.fresh_utc);
+    nvs_set_u16(h, "health_min", s_c.health_min);
+    nvs_set_u32(h, "h_tests", s_c.h_tests);
+    nvs_set_u32(h, "h_fails", s_c.h_fails);
+    nvs_set_u32(h, "h_recov", s_c.h_recovered);
     nvs_commit(h);
     nvs_close(h);
 }
@@ -565,6 +597,101 @@ out:
     xSemaphoreGive(s_c.done);
 }
 
+// --- health check (non-blocking: the sensors task keeps serving the other sensors) ---
+
+enum { H_IDLE, H_STOPPING, H_TEST1, H_SLEEPING, H_WAKING, H_TEST2 };
+
+static void health_log(bool cycled, uint16_t st2)
+{
+    int i = s_c.hlog_i;
+    s_c.hlog[i].utc = utc_now();
+    s_c.hlog[i].mono_us = esp_timer_get_time();
+    s_c.hlog[i].by_fault = s_c.health_by_fault;
+    s_c.hlog[i].st1 = s_c.health_st1;
+    s_c.hlog[i].st2 = st2;
+    s_c.hlog[i].cycled = cycled;
+    s_c.hlog_i = (i + 1) % HEALTH_LOG_N;
+    if (s_c.hlog_n < HEALTH_LOG_N) {
+        s_c.hlog_n++;
+    }
+    s_c.h_tests++;
+    if (s_c.health_st1 != 0) {
+        s_c.h_fails++;
+        if (cycled && st2 == 0) {
+            s_c.h_recovered++;
+        }
+    }
+    nvs_save();
+    if (s_c.health_st1 == 0) {
+        ESP_LOGI(TAG, "health check (%s): self test ok", s_c.health_by_fault ? "after fault" : "timer");
+    } else {
+        ESP_LOGW(TAG, "health check (%s): self test 0x%04x, after power_down/wake_up 0x%04x - %s",
+                 s_c.health_by_fault ? "after fault" : "timer", s_c.health_st1, st2,
+                 st2 == 0 ? "recovered" : "STILL FAILING");
+    }
+}
+
+static void health_schedule(int64_t now_us)
+{
+    s_c.health_next_us = s_c.health_min ? now_us + (int64_t)s_c.health_min * 60 * 1000000 : INT64_MAX;
+}
+
+// one step; returns the time of the next poll
+static int64_t health_step(sensor_inst_t *s, int64_t now_us)
+{
+    uint16_t st;
+    switch (s_c.health_state) {
+    case H_STOPPING:   // stop_periodic sent 500 ms ago
+        send(s, CMD_SELF_TEST);
+        s_c.health_state = H_TEST1;
+        return now_us + 10500 * 1000LL;
+    case H_TEST1:
+        if (receive_words(s, &st, 1) != ESP_OK) {
+            st = 0xffff;
+        }
+        s_c.health_st1 = st;
+        if (st == 0) {
+            health_log(false, 0);
+            break;
+        }
+        send(s, CMD_POWER_DOWN);
+        s_c.health_state = H_SLEEPING;
+        return now_us + 1000 * 1000LL;
+    case H_SLEEPING:
+        send(s, CMD_WAKE_UP);   // not acknowledged by design
+        s_c.health_state = H_WAKING;
+        return now_us + 30 * 1000LL;
+    case H_WAKING:
+        reapply_settings(s);
+        send(s, CMD_SELF_TEST);
+        s_c.health_state = H_TEST2;
+        return now_us + 10500 * 1000LL;
+    case H_TEST2:
+        if (receive_words(s, &st, 1) != ESP_OK) {
+            st = 0xffff;
+        }
+        health_log(true, st);
+        break;
+    default:
+        break;
+    }
+    s_c.health_state = H_IDLE;
+    start_periodic(s);
+    health_schedule(now_us);
+    return now_us + PERIOD_US;
+}
+
+static int64_t health_start(sensor_inst_t *s, int64_t now_us, bool by_fault)
+{
+    s_c.health_by_fault = by_fault;
+    if (by_fault) {
+        s_c.health_last_fault_check_us = now_us;
+    }
+    send(s, CMD_STOP_PERIODIC);
+    s_c.health_state = H_STOPPING;
+    return now_us + 500 * 1000LL;
+}
+
 // --- driver ---
 
 static esp_err_t probe(sensor_inst_t *s)
@@ -614,6 +741,8 @@ static esp_err_t probe(sensor_inst_t *s)
     if (start_periodic(s) != ESP_OK) {
         return ESP_FAIL;
     }
+    health_schedule(esp_timer_get_time());
+    s_c.health_last_fault_check_us = -HEALTH_FAULT_GAP_US;
     s->supported = true;
     return ESP_OK;
 }
@@ -666,7 +795,13 @@ static void update_warn(sensor_inst_t *s, int64_t now_us)
 
 static int64_t poll(sensor_inst_t *s, int64_t now_us)
 {
+    if (s_c.health_state != H_IDLE) {
+        return health_step(s, now_us);
+    }
     handle_request(s);
+    if (now_us >= s_c.health_next_us) {
+        return health_start(s, now_us, false);
+    }
 
     if (s_c.session_req) {
         // Only readings from now on count: the window may hold minutes of stable indoor air,
@@ -706,9 +841,14 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
             ESP_LOGE(TAG, "CO2 reading %u ppm is implausible - sensor problem, run 'scd41 diag'", w[0]);
         }
         sensor_publish(s, "co2_raw_ppm", w[0]);
+        s_c.good_streak = 0;
+        s_c.faults_total++;
         s_c.n_co2 = s_c.i_co2 = 0;
         compensate_pressure(s, now_us);
         update_warn(s, now_us);
+        if (now_us - s_c.health_last_fault_check_us >= HEALTH_FAULT_GAP_US) {
+            return health_start(s, now_us, true);   // self test right away, sleep cycle if it fails
+        }
         return now_us + PERIOD_US;
     }
     if (s_c.implausible) {
@@ -716,6 +856,7 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
         s_c.implausible = 0;
     }
     sensor_publish(s, "co2_ppm", w[0]);
+    s_c.good_streak++;
 
     s_c.co2[s_c.i_co2] = w[0];
     s_c.i_co2 = (s_c.i_co2 + 1) % STABLE_WINDOW;
@@ -827,7 +968,7 @@ static esp_err_t request(req_t r, float arg, char *msg, size_t len)
     s_c.req_arg = arg;
     s_c.req = r;
     sensors_kick(s_c.s);
-    bool ok = xSemaphoreTake(s_c.done, pdMS_TO_TICKS(20000)) == pdTRUE;   // self test takes 10 s
+    bool ok = xSemaphoreTake(s_c.done, pdMS_TO_TICKS(40000)) == pdTRUE;   // self test 10 s, health check up to 23 s first
     esp_err_t err = ok ? s_c.req_err : ESP_ERR_TIMEOUT;
     strlcpy(msg, ok ? s_c.req_msg : "timeout", len);
     xSemaphoreGive(s_c.lock);
@@ -902,6 +1043,58 @@ esp_err_t sensors_scd4x_fresh_air_start(void)
     s_c.session_req = true;   // the sensors task resets the window and starts the session
     sensors_kick(s_c.s);
     return ESP_OK;
+}
+
+esp_err_t sensors_scd4x_health_interval(int minutes)
+{
+    if (!s_c.s || minutes < 0 || minutes > 1440) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_c.health_min = minutes;
+    health_schedule(esp_timer_get_time());
+    nvs_save();
+    return ESP_OK;
+}
+
+void sensors_scd4x_health_print(void)
+{
+    if (!s_c.s) {
+        printf("no SCD4x\n");
+        return;
+    }
+    printf("interval %u min (%s), after implausible readings at most every %lld min\n", s_c.health_min,
+           s_c.health_min ? "self test, power_down/wake_up on failure" : "timer off",
+           (long long)(HEALTH_FAULT_GAP_US / 60000000));
+    printf("since first use: %lu tests, %lu failed, %lu recovered by power_down/wake_up\n", (unsigned long)s_c.h_tests,
+           (unsigned long)s_c.h_fails, (unsigned long)s_c.h_recovered);
+    if (s_c.health_next_us != INT64_MAX) {
+        printf("next check in %lld s\n", (long long)((s_c.health_next_us - esp_timer_get_time()) / 1000000));
+    }
+    for (int k = 0; k < s_c.hlog_n; k++) {
+        int i = (s_c.hlog_i - s_c.hlog_n + k + HEALTH_LOG_N) % HEALTH_LOG_N;
+        char t[24] = "clock not set";
+        if (s_c.hlog[i].utc) {
+            struct tm tm;
+            localtime_r(&s_c.hlog[i].utc, &tm);
+            strftime(t, sizeof(t), "%Y-%m-%d %H:%M:%S", &tm);
+        }
+        printf("  %s %-6s self test 0x%04x", t, s_c.hlog[i].by_fault ? "fault" : "timer", s_c.hlog[i].st1);
+        if (s_c.hlog[i].cycled) {
+            printf(", sleep cycle, again 0x%04x %s", s_c.hlog[i].st2, s_c.hlog[i].st2 == 0 ? "recovered" : "STILL FAILING");
+        }
+        printf("\n");
+    }
+}
+
+bool sensors_scd4x_co2_state(scd4x_co2_state_t *st)
+{
+    if (!s_c.s) {
+        return false;
+    }
+    st->good_streak = s_c.good_streak;
+    st->readings = s_c.n_readings;
+    st->faults = s_c.faults_total;
+    return true;
 }
 
 bool sensors_scd4x_calibration_age(int *days)

@@ -78,6 +78,17 @@ esp_err_t sensors_scd4x_set_outdoor(uint16_t ppm);                   // 380..500
 esp_err_t sensors_scd4x_fresh_air_start(void);
 // Days since the last FRC; false if never or no SCD4x.
 bool sensors_scd4x_calibration_age(int *days);
+typedef struct {
+    uint32_t good_streak;   // consecutive plausible CO2 readings (0 = last one was a fault)
+    uint32_t readings;      // all readings since boot
+    uint32_t faults;        // implausible readings since boot
+} scd4x_co2_state_t;
+// False if there is no SCD4x.
+bool sensors_scd4x_co2_state(scd4x_co2_state_t *st);
+// Health check: self test every <minutes> (0 = only after implausible readings), on failure
+// power_down/wake_up and a second self test. NVS. Each check stops the measurement ~11-23 s.
+esp_err_t sensors_scd4x_health_interval(int minutes);
+void sensors_scd4x_health_print(void);
 
 // Saves driver state that must survive a reboot (BSEC). Call before a planned restart.
 // Waits until no driver is polled (sensors_bus_lock()), up to ~11 s during 'scd41 diag'.

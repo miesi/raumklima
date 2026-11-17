@@ -169,6 +169,17 @@ has two controllers).
   condensing only), supply (peak 175/205 mA at 3.3 V, <= 30 mV variation from other loads,
   separate LDO recommended - here shared 3.3 V with ESP32 WLAN and e-paper via a STEMMA hub).
 - Firmware consequences: readings < 300 ppm are a fault, not data; debug commands in 'scd41'.
+- Later the same day (after Thomas' power cycle ~07:00): good for about 1 h, then again mostly
+  0 ppm with single plausible readings (~537 ppm), self test 0x0004. WLAN radio off for 2 min:
+  still only zeros (18 / 24 / 18 readings on/off/on) - WLAN load is not the (only) cause.
+  power_down/wake_up does not recover it; only cutting the supply did, for about an hour.
+- Health check (every 30 min, and after implausible readings at most every 10 min): self test,
+  on failure power_down/wake_up + second self test, logged ('scd41 health'), counters in NVS.
+  Runs as a state machine, so the BME690/BSEC 3 s cadence is not disturbed (BSEC needs
+  +-6.25 %, Integration Guide 3.2). Conflict: Sensirion's ASC assumes at least 4 h of
+  uninterrupted measurement at a time (datasheet 3.7); a check every 30 min stops that.
+- Supply measurement: the ESP32-S3 has no internal supply channel (soc_caps); GPIO9 on the
+  header is ADC1 channel 8, continuous ADC up to 83.3 kHz, 12 bit. Needs a divider.
 
 ### Networking
 
@@ -185,12 +196,20 @@ has two controllers).
 - `esp_netif_sntp` with `CONFIG_LWIP_DHCP_GET_NTP_SRV=y`. Fallback `ntp.1und1.de` as the configured
   entry; DHCP option 42 replaces it when present.
   The exact replace semantics of lwIP must be tested with and without option 42 (test 3 below).
-- `TZ` from NVS, default `UTC0` (the POSIX string for UTC). `set tz` only calls `tzset()`;
+- `TZ` from NVS, default `CET-1CEST,M3.5.0,M10.5.0/3`. Verified with `show tz` 2026-11-17:
+  switches 2027-03-28T01:00Z and 2027-10-31T01:00Z (last Sundays, EU rule). `set tz` only calls `tzset()`;
   SNTP keeps its servers. Tested 2026-11-17: after `set tz CET-1CEST,M3.5.0,M10.5.0/3` the
   source stayed DHCP (192.168.178.1), the clock showed CET.
 - Server names from the console live in static storage: lwIP keeps only the pointer and
   resolves the name on every request.
 - The UI shows "not synced" until the first sync; no fake 1970 time on screen.
+
+### Derived values
+
+- Dew point from the SHT4x (Magnus, Sonntag 1990: a = 17.62, b = 243.12 C) as
+  `<sht>.dewpoint_c`; warning when any temperature metric is within 1 K of it. Tested with
+  the margin set to 12 K: the colder DS18B20 (21.9 C, dew point 14.2 C) was reported.
+- DNS watch: names used for NTP (later Carbon) resolved every 5 min and after new addresses.
 
 ### Display
 

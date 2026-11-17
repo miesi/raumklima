@@ -45,6 +45,9 @@ void timesync_get_status(timesync_status_t *out);
 
 const char *timesync_source_name(timesync_source_t s);
 
+// ISO 8601 UTC offset of local time at t, e.g. "+01:00" (CET) or "+02:00" (CEST).
+void timesync_iso_offset(time_t t, char *buf, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,5 +1,6 @@
 #include "sensors.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -34,6 +35,8 @@ static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_task;
 static SemaphoreHandle_t s_bus_lock;   // held for each driver poll; see sensors_bus_lock()
 static int s_dropped;                 // sensors found beyond MAX_INST
+static char s_dew_warn[96];           // condensation risk, from derive_dewpoint()
+static char s_dew_logged[METRIC_KEY_LEN];   // sensor of the last logged warning, "" = none
 static char s_dropped_addrs[40];
 
 esp_err_t sensor_read_reg(sensor_inst_t *s, uint8_t reg, uint8_t *buf, size_t len)
@@ -133,9 +136,87 @@ static void probe_all(void)
     }
 }
 
+// --- condensation risk ---
+// Dew point of the room air from an SHT4x (the accurate humidity source), Magnus formula with
+// the coefficients of Sonntag (1990) over water: a = 17.62, b = 243.12 C. Every measured
+// temperature (the SHT4x itself, SCD4x, BME6xx, 1-Wire probes on cold spots) that is within
+// DEW_MARGIN_C of that dew point means condensation is possible there.
+#define DEW_MARGIN_C 1.0f   // ASSUMPTION: our safety margin
+#define DEW_EVERY_US (10LL * 1000 * 1000)
+
+typedef struct {
+    float dew;
+    char worst_key[METRIC_KEY_LEN];
+    float worst_t;
+    bool hit;
+} dew_ctx_t;
+
+static void dew_check(const metric_t *m, void *arg)
+{
+    dew_ctx_t *d = arg;
+    const char *dot = strrchr(m->key, '.');
+    if (!dot || strcmp(dot + 1, "temperature_c") != 0 || esp_timer_get_time() - m->mono_us > METRIC_STALE_US) {
+        return;
+    }
+    if (m->value - d->dew <= DEW_MARGIN_C && (!d->hit || m->value < d->worst_t)) {
+        d->hit = true;
+        d->worst_t = m->value;
+        strlcpy(d->worst_key, m->key, sizeof(d->worst_key));
+    }
+}
+
+static void derive_dewpoint(void)
+{
+    metric_t t, rh;
+    char inst[16] = "";
+    // the primary temperature is an SHT4x when one is present (metrics priority sht4 > ...)
+    if (!metrics_get_primary("temperature_c", &t) || strncmp(t.key, "sht4", 4) != 0) {
+        s_dew_warn[0] = '\0';
+        return;
+    }
+    const char *dot = strchr(t.key, '.');
+    snprintf(inst, sizeof(inst), "%.*s", (int)(dot - t.key), t.key);
+    char key[METRIC_KEY_LEN];
+    snprintf(key, sizeof(key), "%s.humidity_pct", inst);
+    if (!metrics_get(key, &rh) || rh.value <= 0) {
+        return;
+    }
+    const float a = 17.62f, b = 243.12f;
+    float g = logf(rh.value / 100.0f) + a * t.value / (b + t.value);
+    float dew = b * g / (a - g);
+    sensor_publish_as(inst, "dewpoint_c", dew);
+
+    dew_ctx_t d = {.dew = dew};
+    metrics_foreach(dew_check, &d);
+    char w[sizeof(s_dew_warn)] = "";
+    if (d.hit) {
+        const char *k = d.worst_key;
+        const char *kd = strchr(k, '.');
+        snprintf(w, sizeof(w), "condensation risk: %.*s %.1f C, dew point %.1f C", (int)(kd - k), k, d.worst_t, dew);
+    }
+    // log on start, end and change of sensor only - not on every 0.1 K
+    const char *who = d.hit ? d.worst_key : "";
+    if (strcmp(who, s_dew_logged) != 0) {
+        if (d.hit) {
+            ESP_LOGW(TAG, "%s", w);
+        } else {
+            ESP_LOGI(TAG, "condensation risk over (dew point %.1f C)", dew);
+        }
+        strlcpy(s_dew_logged, who, sizeof(s_dew_logged));
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    strlcpy(s_dew_warn, w, sizeof(s_dew_warn));
+    xSemaphoreGive(s_lock);
+}
+
 static void sensors_task(void *arg)
 {
+    int64_t next_dew = 0;
     for (;;) {
+        if (esp_timer_get_time() >= next_dew) {
+            derive_dewpoint();
+            next_dew = esp_timer_get_time() + DEW_EVERY_US;
+        }
         int64_t now = esp_timer_get_time();
         int64_t next = now + 1000000;
         for (int i = 0; i < s_n; i++) {
@@ -255,6 +336,10 @@ void sensors_warnings(char *buf, size_t len)
         snprintf(buf + l, len - l, "%smetrics full (%d), dropping %s", l ? "; " : "", METRICS_MAX, key);
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_dew_warn[0]) {
+        size_t l = strlen(buf);
+        snprintf(buf + l, len - l, "%s%s", l ? "; " : "", s_dew_warn);
+    }
     for (int i = 0; i < s_n; i++) {
         if (s_inst[i].warn[0]) {
             size_t l = strlen(buf);

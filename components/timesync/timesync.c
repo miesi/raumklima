@@ -12,6 +12,7 @@
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
 #include "esp_wifi.h"
+#include "netmgr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "lwip/ip_addr.h"
@@ -82,6 +83,9 @@ esp_err_t timesync_apply(void)
         cfg.num_of_servers = 1;
         cfg.servers[0] = TIMESYNC_FALLBACK;
     }
+    // watch the names for resolvability (network page warns if one fails)
+    const char *names[2] = {cfg.servers[0], cfg.num_of_servers > 1 ? cfg.servers[1] : NULL};
+    netmgr_dns_watch("NTP", names, cfg.num_of_servers);
     esp_err_t err = esp_netif_sntp_init(&cfg);
     if (err == ESP_OK) {
         s_inited = true;
@@ -168,5 +172,18 @@ const char *timesync_source_name(timesync_source_t s)
         return "config";
     default:
         return "fallback";
+    }
+}
+
+void timesync_iso_offset(time_t t, char *buf, size_t len)
+{
+    struct tm tm;
+    char z[8];
+    localtime_r(&t, &tm);
+    strftime(z, sizeof(z), "%z", &tm);   // "+0100"
+    if (strlen(z) == 5) {
+        snprintf(buf, len, "%.3s:%.2s", z, z + 3);
+    } else {
+        strlcpy(buf, z, len);
     }
 }
