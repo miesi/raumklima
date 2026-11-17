@@ -127,6 +127,9 @@ has two controllers).
   log with the ignored addresses, `WARNING` in `show status`, "! n sensor(s) over limit" on the
   overview; the sensors found first (registry order, then address order) keep working.
   Tested 2026-11-16 with the limit set to 1 (BME680 kept, BH1750 at 0x23 reported).
+- Metrics: at most `CONFIG_HUB_METRICS_MAX` (default 64) keys. A new key in a full table takes
+  the slot of the oldest stale metric (renamed or removed probe); without one it is dropped:
+  error in the log, "metrics full" warning in `show status` and on the overview while it lasts.
 - DS2484 (fixed address 0x18): up to `OW_MAX_DEVICES` = 8 devices on its 1-Wire bus.
   Each device = 64-bit ROM ID (shown as 16 hex digits, family code first) plus an optional
   name set on the console (`onewire name <rom> <name>`, `[a-z0-9_]`, max 15 chars, saved in

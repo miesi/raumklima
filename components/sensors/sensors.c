@@ -249,6 +249,11 @@ void sensors_warnings(char *buf, size_t len)
     if (s_dropped) {
         snprintf(buf, len, "%d sensor(s) over limit %d: %s", s_dropped, MAX_INST, s_dropped_addrs);
     }
+    char key[METRIC_KEY_LEN];
+    if (metrics_overflow(key, sizeof(key))) {
+        size_t l = strlen(buf);
+        snprintf(buf + l, len - l, "%smetrics full (%d), dropping %s", l ? "; " : "", METRICS_MAX, key);
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     for (int i = 0; i < s_n; i++) {
         if (s_inst[i].warn[0]) {

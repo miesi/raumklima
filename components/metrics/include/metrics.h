@@ -3,15 +3,17 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <time.h>
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define METRIC_KEY_LEN 40
-#define METRICS_MAX 64
+#define METRICS_MAX CONFIG_HUB_METRICS_MAX
 #define METRIC_STALE_US (60LL * 1000 * 1000)   // older than this = not shown
 
 typedef struct {
@@ -23,7 +25,12 @@ typedef struct {
 
 void metrics_init(void);
 
+// Table full: a new key takes the slot of the oldest stale metric; without one it is dropped
+// (error in the log, metrics_overflow() reports it).
 void metrics_publish(const char *key, float value);
+
+// True if a new key was dropped in the last METRIC_STALE_US; key = the last one dropped.
+bool metrics_overflow(char *key, size_t len);
 
 // Exact key. False if missing or stale.
 bool metrics_get(const char *key, metric_t *out);

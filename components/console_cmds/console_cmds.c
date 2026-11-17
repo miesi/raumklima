@@ -120,8 +120,8 @@ static void show_status(void)
     board_i2c_idle_levels(&sda, &scl);
     printf("i2c        SDA=GPIO%d SCL=GPIO%d, idle levels at boot SDA=%d SCL=%d\n", BOARD_I2C_SDA_GPIO,
            BOARD_I2C_SCL_GPIO, sda, scl);
-    sensor_info_t si[8];
-    int ns = sensors_list(si, 8);
+    sensor_info_t si[SENSORS_MAX];
+    int ns = sensors_list(si, SENSORS_MAX);
     for (int i = 0; i < ns; i++) {
         printf("sensor     0x%02x %-8s as %-8s ok %" PRIu32 " err %" PRIu32 "  %s%s\n", si[i].addr, si[i].model,
                si[i].name, si[i].ok_count, si[i].err_count, si[i].supported ? "" : "NOT SUPPORTED ", si[i].info);
