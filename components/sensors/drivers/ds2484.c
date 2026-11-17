@@ -202,6 +202,13 @@ static void scan(ctx_t *c)
 
 static esp_err_t probe(sensor_inst_t *s)
 {
+    if (s_ctx) {
+        strlcpy(s->model, "DS2484", sizeof(s->model));
+        strlcpy(s->name, "ds2484", sizeof(s->name));
+        strlcpy(s->info, "second DS2484 - not supported", sizeof(s->info));
+        s->supported = false;
+        return ESP_OK;
+    }
     // Device Reset leaves the read pointer on the status register; expected RST set,
     // LL = line level (1 with a pulled-up bus), everything else 0.
     uint8_t c = CMD_DEVICE_RESET, st = 0;

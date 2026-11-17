@@ -29,6 +29,7 @@ struct sensor_inst {
     const sensor_driver_t *drv;
     i2c_master_dev_handle_t dev;
     uint8_t addr;
+    uint8_t bus;           // 0 = IO3/IO8, 1 = IO15/IO16
     char name[16];
     char model[24];
     char info[48];

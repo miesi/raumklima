@@ -131,14 +131,17 @@ static void show_status(void)
         }
     }
 
-    int sda, scl;
-    board_i2c_idle_levels(&sda, &scl);
-    printf("i2c        SDA=GPIO%d SCL=GPIO%d, idle levels at boot SDA=%d SCL=%d\n", BOARD_I2C_SDA_GPIO,
-           BOARD_I2C_SCL_GPIO, sda, scl);
+    for (int b = 0; b < BOARD_I2C_BUSES; b++) {
+        int sda, scl;
+        gpio_num_t psda, pscl;
+        board_i2c_pins(b, &psda, &pscl);
+        board_i2c_idle_levels(b, &sda, &scl);
+        printf("i2c bus %d  SDA=GPIO%d SCL=GPIO%d, idle levels at boot SDA=%d SCL=%d\n", b + 1, psda, pscl, sda, scl);
+    }
     sensor_info_t si[SENSORS_MAX];
     int ns = sensors_list(si, SENSORS_MAX);
     for (int i = 0; i < ns; i++) {
-        printf("sensor     0x%02x %-8s as %-8s ok %" PRIu32 " err %" PRIu32 "  %s%s\n", si[i].addr, si[i].model,
+        printf("sensor     %d:0x%02x %-8s as %-8s ok %" PRIu32 " err %" PRIu32 "  %s%s\n", si[i].bus + 1, si[i].addr, si[i].model,
                si[i].name, si[i].ok_count, si[i].err_count, si[i].supported ? "" : "NOT SUPPORTED ", si[i].info);
     }
     char warn[320];
@@ -322,17 +325,19 @@ static int cmd_i2c(int argc, char **argv)
         printf("usage: i2c scan\n");
         return 1;
     }
-    uint8_t found[128];
-    sensors_bus_lock();
-    int n = i2cbus_scan(found);
-    sensors_bus_unlock();
-    printf("%d device(s):", n);
-    for (int a = 0; a < 128; a++) {
-        if (found[a]) {
-            printf(" 0x%02x", a);
+    for (int b = 0; b < i2cbus_count(); b++) {
+        uint8_t found[128];
+        sensors_bus_lock();
+        int n = i2cbus_scan(b, found);
+        sensors_bus_unlock();
+        printf("bus %d: %d device(s):", b + 1, n);
+        for (int a = 0; a < 128; a++) {
+            if (found[a]) {
+                printf(" 0x%02x", a);
+            }
         }
+        printf("\n");
     }
-    printf("\n");
     return 0;
 }
 
@@ -505,7 +510,7 @@ static int cmd_scd41(int argc, char **argv)
                "  scd41 status              detail page (offset, calibration, fresh air)\n"
                "  scd41 diag                serial, variant, ASC, offset, altitude, pressure, last raw\n"
                "                            reading, 10 s self test (changes nothing)\n"
-               "  scd41 health [<min>]      health check log / interval (default 30, 0 = only on faults)\n"
+               "  scd41 health [<min>]      log / min. interval of checks on implausible CO2 (default 30, 0 = off)\n"
                "  scd41 single              one single-shot measurement (5 s), outside periodic mode\n"
                "  scd41 log on|off          print every raw reading (also with 'log off')\n"
                "  scd41 reinit              reload the sensor settings from its EEPROM\n"
@@ -534,7 +539,7 @@ static int cmd_sensor_show(int argc, char **argv)
         if (argc == 2 && strcmp(argv[1], si[i].name) != 0) {
             continue;
         }
-        printf("%s (%s at 0x%02x): %s\n", si[i].name, si[i].model, si[i].addr, si[i].info);
+        printf("%s (%s at bus %d 0x%02x): %s\n", si[i].name, si[i].model, si[i].bus + 1, si[i].addr, si[i].info);
         char *buf = malloc(1024);
         if (buf && sensors_detail(i, buf, 1024)) {
             for (char *p = buf; *p; p++) {

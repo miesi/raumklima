@@ -16,6 +16,7 @@ typedef struct {
     char name[16];        // instance name, prefix of the metric keys
     char model[24];       // what was detected, e.g. "BME680", "BME690"
     uint8_t addr;
+    uint8_t bus;          // 0 or 1 (shown as 1 / 2)
     bool supported;       // false: detected, but no driver for it (yet)
     uint32_t ok_count;
     uint32_t err_count;
@@ -85,8 +86,9 @@ typedef struct {
 } scd4x_co2_state_t;
 // False if there is no SCD4x.
 bool sensors_scd4x_co2_state(scd4x_co2_state_t *st);
-// Health check: self test every <minutes> (0 = only after implausible readings), on failure
-// power_down/wake_up and a second self test. NVS. Each check stops the measurement ~11-23 s.
+// Health check on implausible CO2 readings, at most every <minutes> (0 = off); the first
+// fault after boot is checked right away. Self test, on failure power_down/wake_up and a
+// second self test. NVS. Each check stops the measurement ~11-23 s.
 esp_err_t sensors_scd4x_health_interval(int minutes);
 void sensors_scd4x_health_print(void);
 

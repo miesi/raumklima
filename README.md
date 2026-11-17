@@ -11,7 +11,8 @@ Status: early, runs on the CrowPanel 5.79. See [docs/plan.md](docs/plan.md).
 - Elecrow CrowPanel ESP32 E-Paper HMI 5.79" (DIS08792E): ESP32-S3, 8 MB flash, 8 MB PSRAM,
   792 x 272 b/w e-paper (2x SSD1683), USB-C via CH340C to UART0.
   Pin map and sources: [docs/hardware-crowpanel-579.md](docs/hardware-crowpanel-579.md)
-- Sensors on I2C (SDA = GPIO3, SCL = GPIO8, header U5), all tested on the CrowPanel:
+- Sensors on I2C bus 1 (SDA = GPIO3, SCL = GPIO8, header U5), all tested on the CrowPanel.
+  Bus 2 (SDA = GPIO15, SCL = GPIO16) is scanned too; any sensor can sit on either bus.
   - SHT4x (SHT45) - reference temperature and humidity (preferred source for both)
   - SCD4x (SCD41) - CO2, with pressure compensation from the BME6xx
   - BME690 - temperature, humidity, pressure, gas resistance, IAQ with BSEC3
@@ -84,9 +85,9 @@ SCD41 (CO2):
   (default 430) - or refuses if the measured mean is more than 150 ppm away from it.
   Progress and result on the display.
 - The display warns when CO2 was not below 450 ppm for more than 156 h.
-- Health check: self test every 30 min (`scd41 health <min>`, 0 = only after implausible
-  readings), on failure power_down/wake_up and a second self test; `scd41 health` shows the log.
-  Each check stops the measurement for 11-23 s (see the ASC note in docs/plan.md).
+- Health check only on implausible readings, at most every 30 min (`scd41 health <min>`,
+  0 = off): self test, on failure power_down/wake_up and a second self test; `scd41 health`
+  shows the log. A healthy sensor is never interrupted (ASC needs 4 h without interruption).
 - Debugging: `scd41 status`, `scd41 diag` (settings + built-in self test), `scd41 single`,
   `scd41 log on|off`, `scd41 reinit`, `scd41 sleep-cycle`, `scd41 asc on|off`.
 - `scd41 factory-reset yes` erases every calibration of the sensor - irreversible.
@@ -100,6 +101,8 @@ Guide). BSEC saves its learning state every 4 h and on `reboot`; a reset or refl
 loses up to 4 h of learning.
 
 `led on|off` switches the red LED (off after boot). `wifi off|on` switches the radio (debug).
+
+On an SCD41 fault the CO2 tile shows "--", not the BSEC estimate.
 
 Warnings on the overview: condensation risk when any measured temperature is within 1 K of the
 dew point computed from the SHT4x; sensor limits; SCD41 faults; ventilation hint.

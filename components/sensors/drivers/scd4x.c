@@ -72,8 +72,7 @@ static const char *TAG = "scd4x";
 #define FRESH_WARN_H         156
 #define OFFSET_AVG_N         24                          // 2 min of differences for "offset auto"
 #define NVS_NS               "scd4x"
-#define HEALTH_DEFAULT_MIN   30    // self test interval, 'scd41 health <min>' (0 = only on faults)
-#define HEALTH_FAULT_GAP_US  (10LL * 60 * 1000 * 1000)   // fault-triggered checks at most every 10 min
+#define HEALTH_DEFAULT_MIN   30    // repeat interval while readings stay implausible; 0 = off
 #define HEALTH_LOG_N         16
 
 static const uint8_t k_addrs[] = {0x62};
@@ -133,8 +132,7 @@ typedef struct {
     uint16_t health_min;            // interval in minutes, 0 = only after implausible readings
     int health_state;               // see health_step()
     bool health_by_fault;
-    int64_t health_next_us;
-    int64_t health_last_fault_check_us;
+    int64_t health_last_us;         // start of the last check
     uint16_t health_st1;
     struct {
         time_t utc;
@@ -631,9 +629,13 @@ static void health_log(bool cycled, uint16_t st2)
     }
 }
 
-static void health_schedule(int64_t now_us)
+// Checks run only on implausible readings, at most every health_min minutes: the first fault
+// is checked right away, a sensor that keeps failing (or flips between 0 and good values) every
+// health_min. A healthy sensor is never stopped (Sensirion's ASC wants >= 4 h of
+// uninterrupted measurement, datasheet 3.7).
+static bool health_due(int64_t now_us)
 {
-    s_c.health_next_us = s_c.health_min ? now_us + (int64_t)s_c.health_min * 60 * 1000000 : INT64_MAX;
+    return s_c.health_min && now_us - s_c.health_last_us >= (int64_t)s_c.health_min * 60 * 1000000;
 }
 
 // one step; returns the time of the next poll
@@ -677,16 +679,13 @@ static int64_t health_step(sensor_inst_t *s, int64_t now_us)
     }
     s_c.health_state = H_IDLE;
     start_periodic(s);
-    health_schedule(now_us);
     return now_us + PERIOD_US;
 }
 
 static int64_t health_start(sensor_inst_t *s, int64_t now_us, bool by_fault)
 {
     s_c.health_by_fault = by_fault;
-    if (by_fault) {
-        s_c.health_last_fault_check_us = now_us;
-    }
+    s_c.health_last_us = now_us;
     send(s, CMD_STOP_PERIODIC);
     s_c.health_state = H_STOPPING;
     return now_us + 500 * 1000LL;
@@ -696,6 +695,14 @@ static int64_t health_start(sensor_inst_t *s, int64_t now_us, bool by_fault)
 
 static esp_err_t probe(sensor_inst_t *s)
 {
+    if (s_c.s) {
+        // one SCD4x only (shared state); report the second one instead of touching it
+        strlcpy(s->model, "SCD4x", sizeof(s->model));
+        strlcpy(s->name, "scd4x", sizeof(s->name));
+        strlcpy(s->info, "second SCD4x - not supported", sizeof(s->info));
+        s->supported = false;
+        return ESP_OK;
+    }
     // may still measure from before a soft reboot; most commands need idle mode
     stop_periodic(s);
     uint16_t sn[3], var;
@@ -741,8 +748,7 @@ static esp_err_t probe(sensor_inst_t *s)
     if (start_periodic(s) != ESP_OK) {
         return ESP_FAIL;
     }
-    health_schedule(esp_timer_get_time());
-    s_c.health_last_fault_check_us = -HEALTH_FAULT_GAP_US;
+    s_c.health_last_us = INT64_MIN / 2;   // the first fault is checked right away
     s->supported = true;
     return ESP_OK;
 }
@@ -799,9 +805,6 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
         return health_step(s, now_us);
     }
     handle_request(s);
-    if (now_us >= s_c.health_next_us) {
-        return health_start(s, now_us, false);
-    }
 
     if (s_c.session_req) {
         // Only readings from now on count: the window may hold minutes of stable indoor air,
@@ -846,8 +849,8 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
         s_c.n_co2 = s_c.i_co2 = 0;
         compensate_pressure(s, now_us);
         update_warn(s, now_us);
-        if (now_us - s_c.health_last_fault_check_us >= HEALTH_FAULT_GAP_US) {
-            return health_start(s, now_us, true);   // self test right away, sleep cycle if it fails
+        if (health_due(now_us)) {
+            return health_start(s, now_us, true);
         }
         return now_us + PERIOD_US;
     }
@@ -1051,7 +1054,6 @@ esp_err_t sensors_scd4x_health_interval(int minutes)
         return ESP_ERR_INVALID_ARG;
     }
     s_c.health_min = minutes;
-    health_schedule(esp_timer_get_time());
     nvs_save();
     return ESP_OK;
 }
@@ -1062,13 +1064,13 @@ void sensors_scd4x_health_print(void)
         printf("no SCD4x\n");
         return;
     }
-    printf("interval %u min (%s), after implausible readings at most every %lld min\n", s_c.health_min,
-           s_c.health_min ? "self test, power_down/wake_up on failure" : "timer off",
-           (long long)(HEALTH_FAULT_GAP_US / 60000000));
+    printf("checks only on implausible CO2 readings, at most every %u min (0 = off);\n"
+           "self test, power_down/wake_up and a second self test on failure\n", s_c.health_min);
     printf("since first use: %lu tests, %lu failed, %lu recovered by power_down/wake_up\n", (unsigned long)s_c.h_tests,
            (unsigned long)s_c.h_fails, (unsigned long)s_c.h_recovered);
-    if (s_c.health_next_us != INT64_MAX) {
-        printf("next check in %lld s\n", (long long)((s_c.health_next_us - esp_timer_get_time()) / 1000000));
+    if (s_c.hlog_n && s_c.health_min) {
+        int64_t left = (int64_t)s_c.health_min * 60 - (esp_timer_get_time() - s_c.health_last_us) / 1000000;
+        printf("next check possible in %lld s (only if a reading is implausible)\n", (long long)(left > 0 ? left : 0));
     }
     for (int k = 0; k < s_c.hlog_n; k++) {
         int i = (s_c.hlog_i - s_c.hlog_n + k + HEALTH_LOG_N) % HEALTH_LOG_N;

@@ -34,13 +34,21 @@ extern "C" {
 
 #define BOARD_I2C_SDA_GPIO    ((gpio_num_t)CONFIG_HUB_I2C_SDA_GPIO)
 #define BOARD_I2C_SCL_GPIO    ((gpio_num_t)CONFIG_HUB_I2C_SCL_GPIO)
+#if CONFIG_HUB_I2C2_ENABLE
+#define BOARD_I2C_BUSES       2
+#else
+#define BOARD_I2C_BUSES       1
+#endif
+
+// Pins of I2C bus 0 (IO3/IO8) or 1 (IO15/IO16).
+void board_i2c_pins(int bus, gpio_num_t *sda, gpio_num_t *scl);
 
 // Power rails, LED, I2C pull-up check. Call first.
 void board_init(void);
 
 // Level of SDA/SCL with internal pull-ups off, sampled in board_init() before the I2C
 // driver takes the pins. 1/1 means external pull-ups are present.
-void board_i2c_idle_levels(int *sda, int *scl);
+void board_i2c_idle_levels(int bus, int *sda, int *scl);
 
 // Starts the key scanner; posts APP_EVENT_KEY. Needs the default event loop.
 void board_keys_start(void);

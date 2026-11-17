@@ -88,50 +88,74 @@ void sensors_kick(sensor_inst_t *s)
     }
 }
 
+// Instance names are metric prefixes and must be unique: a second sensor of the same kind
+// (e.g. on the other bus) gets "_2", "_3", ...
+static void unique_name(sensor_inst_t *s)
+{
+    char base[sizeof(s->name)];
+    strlcpy(base, s->name, sizeof(base));
+    for (unsigned k = 2; k <= 9; k++) {
+        bool dup = false;
+        for (int i = 0; i < s_n; i++) {
+            dup |= strcmp(s_inst[i].name, s->name) == 0;
+        }
+        if (!dup) {
+            return;
+        }
+        snprintf(s->name, sizeof(s->name), "%.12s_%c", base, (char)('0' + k));
+    }
+}
+
 static void probe_all(void)
 {
-    i2c_master_bus_handle_t bus = i2cbus_handle();
-    uint8_t claimed[128] = {0};
-    for (size_t d = 0; d < sizeof(k_drivers) / sizeof(k_drivers[0]); d++) {
-        const sensor_driver_t *drv = k_drivers[d];
-        for (int a = 0; a < drv->n_addrs; a++) {
-            uint8_t addr = drv->addrs[a];
-            if (claimed[addr] || i2cbus_probe(addr) != ESP_OK) {
-                continue;
-            }
-            if (s_n >= MAX_INST) {
-                // no room: report it, keep the sensors found first
+    for (int b = 0; b < i2cbus_count(); b++) {
+        i2c_master_bus_handle_t bus = i2cbus_handle(b);
+        uint8_t claimed[128] = {0};
+        for (size_t d = 0; d < sizeof(k_drivers) / sizeof(k_drivers[0]); d++) {
+            const sensor_driver_t *drv = k_drivers[d];
+            for (int a = 0; a < drv->n_addrs; a++) {
+                uint8_t addr = drv->addrs[a];
+                if (claimed[addr] || i2cbus_probe(b, addr) != ESP_OK) {
+                    continue;
+                }
+                if (s_n >= MAX_INST) {
+                    // no room: report it, keep the sensors found first
+                    claimed[addr] = 1;
+                    s_dropped++;
+                    size_t l = strlen(s_dropped_addrs);
+                    snprintf(s_dropped_addrs + l, sizeof(s_dropped_addrs) - l, "%s%d:0x%02x", l ? " " : "", b + 1,
+                             addr);
+                    continue;
+                }
+                sensor_inst_t *s = &s_inst[s_n];
+                memset(s, 0, sizeof(*s));
+                s->drv = drv;
+                s->addr = addr;
+                s->bus = b;
+                const i2c_device_config_t dc = {
+                    .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+                    .device_address = addr,
+                    .scl_speed_hz = i2cbus_freq_hz(),
+                };
+                if (i2c_master_bus_add_device(bus, &dc, &s->dev) != ESP_OK) {
+                    continue;
+                }
+                esp_err_t err = drv->probe(s);
+                if (err == ESP_ERR_NOT_FOUND) {
+                    i2c_master_bus_rm_device(s->dev);
+                    continue;
+                }
                 claimed[addr] = 1;
-                s_dropped++;
-                size_t l = strlen(s_dropped_addrs);
-                snprintf(s_dropped_addrs + l, sizeof(s_dropped_addrs) - l, "%s0x%02x", l ? " " : "", addr);
-                continue;
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "bus %d 0x%02x %s: init failed: %s", b + 1, addr, s->model, esp_err_to_name(err));
+                    s->supported = false;
+                }
+                unique_name(s);
+                ESP_LOGI(TAG, "bus %d 0x%02x: %s as '%s'%s", b + 1, addr, s->model, s->name,
+                         s->supported ? "" : " (not supported)");
+                s->next_us = esp_timer_get_time();
+                s_n++;
             }
-            sensor_inst_t *s = &s_inst[s_n];
-            memset(s, 0, sizeof(*s));
-            s->drv = drv;
-            s->addr = addr;
-            const i2c_device_config_t dc = {
-                .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-                .device_address = addr,
-                .scl_speed_hz = i2cbus_freq_hz(),
-            };
-            if (i2c_master_bus_add_device(bus, &dc, &s->dev) != ESP_OK) {
-                continue;
-            }
-            esp_err_t err = drv->probe(s);
-            if (err == ESP_ERR_NOT_FOUND) {
-                i2c_master_bus_rm_device(s->dev);
-                continue;
-            }
-            claimed[addr] = 1;
-            if (err != ESP_OK) {
-                ESP_LOGW(TAG, "0x%02x %s: init failed: %s", addr, s->model, esp_err_to_name(err));
-                s->supported = false;
-            }
-            ESP_LOGI(TAG, "0x%02x: %s as '%s'%s", addr, s->model, s->name, s->supported ? "" : " (not supported)");
-            s->next_us = esp_timer_get_time();
-            s_n++;
         }
     }
 }
@@ -279,6 +303,7 @@ int sensors_list(sensor_info_t *out, int max)
         strlcpy(out[i].model, s->model, sizeof(out[i].model));
         strlcpy(out[i].info, s->info, sizeof(out[i].info));
         out[i].addr = s->addr;
+        out[i].bus = s->bus;
         out[i].supported = s->supported;
         out[i].ok_count = s->ok_count;
         out[i].err_count = s->err_count;
@@ -328,7 +353,7 @@ void sensors_warnings(char *buf, size_t len)
 {
     buf[0] = '\0';
     if (s_dropped) {
-        snprintf(buf, len, "%d sensor(s) over limit %d: %s", s_dropped, MAX_INST, s_dropped_addrs);
+        snprintf(buf, len, "%d sensor(s) over limit %d: %s", s_dropped, MAX_INST, s_dropped_addrs);   // bus:addr
     }
     char key[METRIC_KEY_LEN];
     if (metrics_overflow(key, sizeof(key))) {

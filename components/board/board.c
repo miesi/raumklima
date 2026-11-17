@@ -8,25 +8,48 @@
 
 static const char *TAG = "board";
 
-static int s_sda_idle = -1;
-static int s_scl_idle = -1;
+static int s_sda_idle[BOARD_I2C_BUSES];
+static int s_scl_idle[BOARD_I2C_BUSES];
+
+void board_i2c_pins(int bus, gpio_num_t *sda, gpio_num_t *scl)
+{
+#if CONFIG_HUB_I2C2_ENABLE
+    if (bus == 1) {
+        *sda = (gpio_num_t)CONFIG_HUB_I2C2_SDA_GPIO;
+        *scl = (gpio_num_t)CONFIG_HUB_I2C2_SCL_GPIO;
+        return;
+    }
+#endif
+    *sda = BOARD_I2C_SDA_GPIO;
+    *scl = BOARD_I2C_SCL_GPIO;
+}
 
 static void probe_pullups(void)
 {
-    // Pins float without external pull-ups. Disable internal pulls, give the line time to
-    // settle, then read. A pulled-up line reads 1.
-    const gpio_num_t pins[2] = {BOARD_I2C_SDA_GPIO, BOARD_I2C_SCL_GPIO};
-    for (int i = 0; i < 2; i++) {
-        gpio_reset_pin(pins[i]);
-        gpio_set_direction(pins[i], GPIO_MODE_INPUT);
-        gpio_set_pull_mode(pins[i], GPIO_FLOATING);
+    // Discharge the line (drive it low), release it with internal pulls off and read after
+    // 200 us: an external pull-up (kOhm) has pulled it high by then, an open pin stays low.
+    // (gpio_reset_pin() enables the internal pull-up, so without the discharge an unconnected
+    // pin keeps reading 1.)
+    for (int b = 0; b < BOARD_I2C_BUSES; b++) {
+        gpio_num_t pins[2];
+        board_i2c_pins(b, &pins[0], &pins[1]);
+        for (int i = 0; i < 2; i++) {
+            gpio_reset_pin(pins[i]);
+            gpio_set_pull_mode(pins[i], GPIO_FLOATING);
+            gpio_set_direction(pins[i], GPIO_MODE_OUTPUT);
+            gpio_set_level(pins[i], 0);
+        }
+        esp_rom_delay_us(10);
+        for (int i = 0; i < 2; i++) {
+            gpio_set_direction(pins[i], GPIO_MODE_INPUT);
+        }
+        esp_rom_delay_us(200);
+        s_sda_idle[b] = gpio_get_level(pins[0]);
+        s_scl_idle[b] = gpio_get_level(pins[1]);
+        ESP_LOGI(TAG, "I2C bus %d idle levels without internal pull-ups: SDA(GPIO%d)=%d SCL(GPIO%d)=%d%s", b + 1,
+                 pins[0], s_sda_idle[b], pins[1], s_scl_idle[b],
+                 (s_sda_idle[b] && s_scl_idle[b]) ? " - external pull-ups present" : " - no pull-ups (nothing connected?)");
     }
-    esp_rom_delay_us(200);
-    s_sda_idle = gpio_get_level(BOARD_I2C_SDA_GPIO);
-    s_scl_idle = gpio_get_level(BOARD_I2C_SCL_GPIO);
-    ESP_LOGI(TAG, "I2C idle levels without internal pull-ups: SDA(GPIO%d)=%d SCL(GPIO%d)=%d%s",
-             BOARD_I2C_SDA_GPIO, s_sda_idle, BOARD_I2C_SCL_GPIO, s_scl_idle,
-             (s_sda_idle && s_scl_idle) ? " - external pull-ups present" : " - CHECK PULL-UPS");
 }
 
 void board_init(void)
@@ -42,10 +65,10 @@ void board_init(void)
     probe_pullups();
 }
 
-void board_i2c_idle_levels(int *sda, int *scl)
+void board_i2c_idle_levels(int bus, int *sda, int *scl)
 {
-    *sda = s_sda_idle;
-    *scl = s_scl_idle;
+    *sda = bus < BOARD_I2C_BUSES ? s_sda_idle[bus] : -1;
+    *scl = bus < BOARD_I2C_BUSES ? s_scl_idle[bus] : -1;
 }
 
 void board_led_set(bool on)

@@ -272,8 +272,12 @@ static void page_overview(int page, int count)
         } else {
             strlcpy(b, "--", sizeof(b));
         }
+    } else if (have_scd) {
+        // no BSEC estimate as a stand-in: it is not a CO2 measurement (2200 ppm seen indoors)
+        set_text(s_tile_cap[4], "CO2 (SCD41 fault)");
+        strlcpy(b, "--", sizeof(b));
     } else if (metrics_get_primary("co2eq_ppm", &m)) {
-        set_text(s_tile_cap[4], have_scd ? "CO2 est. BSEC (SCD41 fault)" : "CO2 eq. (BSEC est.)");
+        set_text(s_tile_cap[4], "CO2 eq. (BSEC est.)");
         snprintf(b, sizeof(b), "%.0f ppm", m.value);
     } else {
         set_text(s_tile_cap[4], have_scd ? "CO2 (SCD41 fault)" : "CO2");
@@ -465,7 +469,7 @@ static void page_sensor(int idx, char *c0, size_t l0, char *c1, size_t l1)
     }
     const sensor_info_t *s = &si[idx];
     char t[64];
-    snprintf(t, sizeof(t), "%s at 0x%02x%s", s->model, s->addr, s->supported ? "" : " - not supported");
+    snprintf(t, sizeof(t), "%s at %d:0x%02x%s", s->model, s->bus + 1, s->addr, s->supported ? "" : " - not supported");
     set_text(s_title, t);
     c0[0] = c1[0] = '\0';
     if (!s->supported) {
@@ -511,14 +515,21 @@ static void page_system(char *c0, size_t l0, char *c1, size_t l1)
              app->version, app->idf_ver, BOARD_NAME, up, rr,
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
-    int sda, scl;
-    board_i2c_idle_levels(&sda, &scl);
+    c1[0] = '\0';
+    for (int b = 0; b < BOARD_I2C_BUSES; b++) {
+        int sda, scl;
+        gpio_num_t psda, pscl;
+        board_i2c_pins(b, &psda, &pscl);
+        board_i2c_idle_levels(b, &sda, &scl);
+        snprintf(c1 + strlen(c1), l1 - strlen(c1), "I2C %d    GPIO%d/%d, pull-ups %s\n", b + 1, psda, pscl,
+                 (sda && scl) ? "ok" : "none");
+    }
     epd_stats_t e;
     epd_get_stats(&e);
-    snprintf(c1, l1, "I2C      SDA GPIO%d, SCL GPIO%d\nPull-ups %s\nE-paper  %" PRIu32 " full, %" PRIu32
-                     " partial\nLast     SPI %" PRIu32 " ms, panel %" PRIu32 " ms\nTimeouts %" PRIu32,
-             BOARD_I2C_SDA_GPIO, BOARD_I2C_SCL_GPIO, (sda && scl) ? "present" : "MISSING", e.full_count,
-             e.partial_count, e.last_spi_ms, e.last_refresh_ms, e.busy_timeouts);
+    snprintf(c1 + strlen(c1), l1 - strlen(c1),
+             "E-paper  %" PRIu32 " full, %" PRIu32 " partial\nLast     SPI %" PRIu32 " ms, panel %" PRIu32
+             " ms\nTimeouts %" PRIu32,
+             e.full_count, e.partial_count, e.last_spi_ms, e.last_refresh_ms, e.busy_timeouts);
     char w[96];
     sensors_warnings(w, sizeof(w));
     if (w[0]) {

@@ -174,11 +174,19 @@ has two controllers).
   0 ppm with single plausible readings (~537 ppm), self test 0x0004. WLAN radio off for 2 min:
   still only zeros (18 / 24 / 18 readings on/off/on) - WLAN load is not the (only) cause.
   power_down/wake_up does not recover it; only cutting the supply did, for about an hour.
-- Health check (every 30 min, and after implausible readings at most every 10 min): self test,
+- Health check (changed 2026-11-17 evening: only on implausible readings, at most every 30 min;
+  first: every 30 min regardless): self test,
   on failure power_down/wake_up + second self test, logged ('scd41 health'), counters in NVS.
   Runs as a state machine, so the BME690/BSEC 3 s cadence is not disturbed (BSEC needs
   +-6.25 %, Integration Guide 3.2). Conflict: Sensirion's ASC assumes at least 4 h of
   uninterrupted measurement at a time (datasheet 3.7); a check every 30 min stops that.
+- The self test is not a reliable indicator: 2026-11-17 20:46 it returned 0x0000 while the
+  sensor was giving 0 ppm readings in between plausible ones.
+- Second I2C bus (IO15/IO16, header pins 3 and 18) to run the SCD41 apart from the other
+  sensors and the hub. Sensors are probed on both buses; duplicate instance names get "_2";
+  SCD4x and DS2484 are single-instance (a second one is reported, not driven).
+- Pull-up check at boot: gpio_reset_pin() enables the internal pull-up, so an open pin read 1.
+  Now the line is discharged first; tested: bus 1 = 1/1, open bus 2 = 0/0.
 - Supply measurement: the ESP32-S3 has no internal supply channel (soc_caps); GPIO9 on the
   header is ADC1 channel 8, continuous ADC up to 83.3 kHz, 12 bit. Needs a divider.
 
