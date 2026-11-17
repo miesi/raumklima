@@ -12,15 +12,21 @@
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "lwip/ip_addr.h"
 
 static const char *TAG = "timesync";
 
+static SemaphoreHandle_t s_lock;   // timesync_apply() runs in the console and the event task
 static bool s_inited;
 static bool s_from_config;
 static bool s_synced;
 static time_t s_last_sync;
 static uint32_t s_sync_count;
+// lwIP keeps only the pointer to a server name (sntp_setservername() does not copy) and
+// resolves the name again on every request, so the names must outlive timesync_apply().
+static char s_servers[APPCFG_NTP_MAX][sizeof(((appcfg_t *)0)->ntp[0])];
 
 static void on_sync(struct timeval *tv)
 {
@@ -39,8 +45,9 @@ esp_err_t timesync_apply(void)
     setenv("TZ", c.tz, 1);
     tzset();
 
+    xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s_inited) {
-        esp_netif_sntp_deinit();
+        esp_netif_sntp_deinit();   // SNTP stopped: nothing reads s_servers until the init below
         s_inited = false;
     }
 
@@ -51,10 +58,12 @@ esp_err_t timesync_apply(void)
         // console override: no DHCP servers
         s_from_config = true;
         cfg.server_from_dhcp = false;
-        cfg.servers[0] = c.ntp[0];
-        cfg.num_of_servers = c.ntp[1][0] ? 2 : 1;
-        if (c.ntp[1][0]) {
-            cfg.servers[1] = c.ntp[1];
+        strlcpy(s_servers[0], c.ntp[0], sizeof(s_servers[0]));
+        strlcpy(s_servers[1], c.ntp[1], sizeof(s_servers[1]));
+        cfg.servers[0] = s_servers[0];
+        cfg.num_of_servers = s_servers[1][0] ? 2 : 1;
+        if (s_servers[1][0]) {
+            cfg.servers[1] = s_servers[1];
         }
     } else {
         // Fallback servers in slots 0 and 1. If the DHCP ACK carries option 42, lwIP puts those
@@ -73,6 +82,7 @@ esp_err_t timesync_apply(void)
     } else {
         ESP_LOGE(TAG, "sntp init: %s", esp_err_to_name(err));
     }
+    xSemaphoreGive(s_lock);
     return err;
 }
 
@@ -98,6 +108,7 @@ static void on_got_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 
 esp_err_t timesync_start(void)
 {
+    s_lock = xSemaphoreCreateMutex();
     esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, on_wifi_disconnect, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_got_ip, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6, on_got_ip, NULL);
@@ -112,6 +123,7 @@ void timesync_get_status(timesync_status_t *out)
     out->sync_count = s_sync_count;
     bool named_slot0 = false;
     bool any_server = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);   // not while timesync_apply() swaps the servers
     if (s_inited) {
         for (int i = 0; i < TIMESYNC_SLOTS; i++) {
             const char *name = esp_sntp_getservername(i);
@@ -130,6 +142,7 @@ void timesync_get_status(timesync_status_t *out)
             out->reach[i] = esp_sntp_getreachability(i);
         }
     }
+    xSemaphoreGive(s_lock);
     if (s_from_config) {
         out->source = TIMESYNC_SRC_CONFIG;
     } else if (any_server && !named_slot0) {
