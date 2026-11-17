@@ -117,13 +117,20 @@ static int prio(const char *key)
     return 3;
 }
 
-bool metrics_get_primary(const char *quantity, metric_t *out)
+// Instances whose temperature and humidity are a by-product of another measurement: the SCD4x
+// measures them inside its own housing, next to its heated IR source, for its compensation.
+static bool byproduct(const char *key)
+{
+    return strncmp(key, "scd4", 4) == 0;
+}
+
+static bool get_best(const char *quantity, bool ambient, metric_t *out)
 {
     int best = -1, best_prio = 99;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     for (int i = 0; i < s_n; i++) {
         const char *dot = strchr(s_m[i].key, '.');
-        if (!dot || strcmp(dot + 1, quantity) != 0 || !fresh(&s_m[i])) {
+        if (!dot || strcmp(dot + 1, quantity) != 0 || !fresh(&s_m[i]) || (ambient && byproduct(s_m[i].key))) {
             continue;
         }
         int p = prio(s_m[i].key);
@@ -137,6 +144,16 @@ bool metrics_get_primary(const char *quantity, metric_t *out)
     }
     xSemaphoreGive(s_lock);
     return best >= 0;
+}
+
+bool metrics_get_primary(const char *quantity, metric_t *out)
+{
+    return get_best(quantity, false, out);
+}
+
+bool metrics_get_ambient(const char *quantity, metric_t *out)
+{
+    return get_best(quantity, true, out);
 }
 
 static int cmp(const void *a, const void *b)

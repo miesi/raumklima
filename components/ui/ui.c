@@ -173,10 +173,11 @@ static void build_screen(void)
 
 // --- formatting helpers ---
 
+// value of a sensor that measures the room air (not a by-product such as the SCD4x temperature)
 static void fmt_metric(char *buf, size_t len, const char *quantity, const char *fmt)
 {
     metric_t m;
-    if (metrics_get_primary(quantity, &m)) {
+    if (metrics_get_ambient(quantity, &m)) {
         snprintf(buf, len, fmt, m.value);
     } else {
         strlcpy(buf, "--", len);
@@ -245,9 +246,9 @@ static void page_overview(int page, int count)
         strlcpy(b, "--", sizeof(b));
     }
     set_text(s_tile_val[3], b);
-    // 4 CO2: measured (SCD4x) or BSEC estimate. With an SCD4x the tile switches to the
-    // estimate on the first implausible reading and back only after CO2_BACK_STREAK plausible
-    // readings in a row, so a flaky sensor does not make the caption flip every few seconds.
+    // 4 CO2: measured (SCD4x); the BSEC estimate only if there is no SCD4x at all. With an SCD4x
+    // the tile shows "--" from the first implausible reading and the value again only after
+    // CO2_BACK_STREAK plausible readings in a row, so the caption does not flip every few seconds.
     scd4x_co2_state_t cs;
     bool have_scd = sensors_scd4x_co2_state(&cs);
     if (have_scd) {
@@ -272,10 +273,16 @@ static void page_overview(int page, int count)
         } else {
             strlcpy(b, "--", sizeof(b));
         }
+    } else if (have_scd) {
+        // SCD41 present but faulty: "--", not the BSEC estimate (2200 ppm seen indoors)
+        set_text(s_tile_cap[4], "CO2 (SCD41 fault)");
+        strlcpy(b, "--", sizeof(b));
+    } else if (metrics_get_primary("co2eq_ppm", &m)) {
+        // no SCD41 at all: the BSEC estimate, marked as such (Thomas, 2026-11-17)
+        set_text(s_tile_cap[4], "CO2 eq. (BSEC est.)");
+        snprintf(b, sizeof(b), "%.0f ppm", m.value);
     } else {
-        // Never the BSEC "CO2 equivalent" here (Thomas, 2026-11-17): it is an estimate from VOCs,
-        // not a CO2 measurement (2200 ppm seen indoors). Only a CO2 sensor feeds this tile.
-        set_text(s_tile_cap[4], have_scd ? "CO2 (SCD41 fault)" : "CO2 (no sensor)");
+        set_text(s_tile_cap[4], "CO2");
         strlcpy(b, "--", sizeof(b));
     }
     set_text(s_tile_val[4], b);

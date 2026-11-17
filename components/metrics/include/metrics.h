@@ -39,6 +39,10 @@ bool metrics_get(const char *key, metric_t *out);
 // Priority by instance prefix: sht4x > bme6xx > scd4x > others.
 bool metrics_get_primary(const char *quantity, metric_t *out);
 
+// Like metrics_get_primary(), but only from sensors that measure the room air for its own sake:
+// skips by-products such as the SCD4x temperature and humidity. For the overview tiles.
+bool metrics_get_ambient(const char *quantity, metric_t *out);
+
 // Calls fn for every metric (also stale ones), sorted by key.
 void metrics_foreach(void (*fn)(const metric_t *m, void *arg), void *arg);
 

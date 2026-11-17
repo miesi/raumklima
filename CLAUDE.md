@@ -50,8 +50,11 @@ GitHub - everything committed must be fit for that (no secrets, no unlicensed th
   settable on the console. Compile-time values are defaults only.
 - Limits (`CONFIG_HUB_SENSORS_MAX`, `CONFIG_HUB_METRICS_MAX`, `OW_MAX_DEVICES`) are enforced
   with an error message and the first devices found keep working - never a silent truncation.
-- The overview CO2 tile shows only a real CO2 sensor (SCD4x). Never fall back to the BSEC
-  `co2eq_ppm` estimate there, in no case (no sensor, fault, boot) - Thomas' explicit decision.
+- Overview CO2 tile (Thomas' decision): with an SCD4x only its measurement, "--" while it is
+  faulty - never the BSEC `co2eq_ppm` estimate as a stand-in. Without any SCD4x the estimate
+  is shown, captioned "CO2 eq. (BSEC est.)".
+- Overview tiles show only sensors that measure the room air (`metrics_get_ambient()`), not
+  by-products such as the SCD4x temperature and humidity.
 - Board pins only in `components/board/`. Nothing else hard-codes a GPIO number.
 - Timestamps sent off-device are UTC; TZ is for display only.
 

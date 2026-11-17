@@ -102,10 +102,17 @@ loses up to 4 h of learning.
 
 `led on|off` switches the red LED (off after boot). `wifi off|on` switches the radio (debug).
 
-On an SCD41 fault the CO2 tile shows "--", not the BSEC estimate.
+On an SCD41 fault the CO2 tile shows "--", not the BSEC estimate. Only without any SCD41 the
+tile shows the BSEC estimate, captioned "CO2 eq. (BSEC est.)".
+
+The SCD41 needs an SHT4x (reference for its temperature offset) and a BME6xx (pressure
+compensation); without them the overview warns "missing SHT4x, BME6xx". Its own temperature and
+humidity are measured inside its housing and appear only on its detail page, never on the
+overview tiles.
 
 Warnings on the overview: condensation risk when any measured temperature is within 1 K of the
-dew point computed from the SHT4x; sensor limits; SCD41 faults; ventilation hint.
+dew point computed from the SHT4x; sensor limits; SCD41 faults and missing companions;
+ventilation hint.
 The network page shows whether the configured host names (NTP) resolve.
 
 ## Display and keys

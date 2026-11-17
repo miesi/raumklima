@@ -770,12 +770,40 @@ static void compensate_pressure(sensor_inst_t *s, int64_t now_us)
     }
 }
 
+// The SCD41 needs two companions: an SHT4x as the reference for its temperature offset (its own
+// temperature and humidity are measured inside its housing) and a pressure sensor (BME6xx) for
+// the pressure compensation. Found by quantity, like every other value from another sensor.
+#define COMPANION_GRACE_US (30LL * 1000 * 1000)   // first readings of the others after boot
+
+static void companions(bool *sht, bool *pressure)
+{
+    metric_t m;
+    *sht = metrics_get_primary("temperature_c", &m) && strncmp(m.key, "sht4", 4) == 0;
+    *pressure = metrics_get_primary("pressure_hpa", &m);
+}
+
+// "" if both are there (or still booting), else e.g. "SHT4x, BME6xx"
+static void missing_companions(int64_t now_us, char *buf, size_t len)
+{
+    bool sht, p;
+    buf[0] = '\0';
+    if (now_us < COMPANION_GRACE_US) {
+        return;
+    }
+    companions(&sht, &p);
+    snprintf(buf, len, "%s%s%s", sht ? "" : "SHT4x", !sht && !p ? ", " : "", p ? "" : "BME6xx");
+}
+
 static void update_warn(sensor_inst_t *s, int64_t now_us)
 {
     char w[sizeof(s->warn)] = "";
+    char miss[16];   // longest: "SHT4x, BME6xx"
     time_t now = utc_now();
+    missing_companions(now_us, miss, sizeof(miss));
     if (s_c.implausible) {
-        snprintf(w, sizeof(w), "SCD41: CO2 %s - sensor problem, 'scd41 diag'", "implausible (< 300 ppm)");
+        snprintf(w, sizeof(w), "SCD41: CO2 implausible (< 300 ppm), 'scd41 diag'%s%s", miss[0] ? "; missing " : "", miss);
+    } else if (miss[0]) {
+        snprintf(w, sizeof(w), "SCD41 needs SHT4x + BME6xx, missing %s", miss);
     } else if (s_c.session) {
         int span;
         co2_stable(&span);
@@ -918,36 +946,56 @@ static void detail(sensor_inst_t *s, char *buf, size_t len)
 {
     metric_t m;
     size_t o = 0;
+// append; a truncated text stays terminated and o never passes len
+#define ADD(...) do { if (o < len) { int r_ = snprintf(buf + o, len - o, __VA_ARGS__); o += r_ > 0 ? (size_t)r_ : 0; } } while (0)
     char key[METRIC_KEY_LEN];
     snprintf(key, sizeof(key), "%s.co2_ppm", s->name);
     if (metrics_get(key, &m)) {
-        o += snprintf(buf + o, len - o, "CO2          %.0f ppm\n", m.value);
+        ADD("CO2          %.0f ppm\n", m.value);
+    } else if (snprintf(key, sizeof(key), "%s.co2_raw_ppm", s->name), metrics_get(key, &m)) {
+        ADD("CO2          %.0f ppm IMPLAUSIBLE\n", m.value);
+    }
+    // own temperature and humidity: measured inside the housing, not shown on the overview
+    snprintf(key, sizeof(key), "%s.temperature_c", s->name);
+    if (metrics_get(key, &m)) {
+        ADD("Temperature  %.1f \xc2\xb0" "C (internal)\n", m.value);
+    }
+    snprintf(key, sizeof(key), "%s.humidity_pct", s->name);
+    if (metrics_get(key, &m)) {
+        ADD("Humidity     %.0f %% (internal)\n", m.value);
     }
     if (isnan(s_c.offset_c)) {
-        o += snprintf(buf + o, len - o, "T offset     not calibrated\n");
+        ADD("T offset     not calibrated\n");
     } else {
-        o += snprintf(buf + o, len - o, "T offset     %.2f \xc2\xb0" "C\n", s_c.offset_c);
+        ADD("T offset     %.2f \xc2\xb0" "C\n", s_c.offset_c);
     }
     if (s_c.diff_n) {
-        o += snprintf(buf + o, len - o, "T - SHT4x    %+.2f \xc2\xb0" "C\n", s_c.diff_sum / s_c.diff_n);
+        ADD("T - SHT4x    %+.2f \xc2\xb0" "C\n", s_c.diff_sum / s_c.diff_n);
     }
-    o += snprintf(buf + o, len - o, "Pressure     %u hPa (compensation)\n", s_c.pressure_hpa);
-    o += snprintf(buf + o, len - o, "Outdoor CO2  %u ppm, ASC target %s\n", s_c.outdoor_ppm, s_c.asc_target_ok ? "set" : "FAILED");
+    ADD("Pressure     %u hPa (compensation)\n", s_c.pressure_hpa);
+    ADD("Outdoor CO2  %u ppm, ASC target %s\n", s_c.outdoor_ppm, s_c.asc_target_ok ? "set" : "FAILED");
     if (s_c.frc_utc) {
         char d[24];
         struct tm tm;
         time_t t = s_c.frc_utc;
         gmtime_r(&t, &tm);
         strftime(d, sizeof(d), "%Y-%m-%d %H:%M", &tm);
-        o += snprintf(buf + o, len - o, "Calibrated   %s, %u ppm, %+d\n", d, s_c.frc_target, s_c.frc_correction);
+        ADD("Calibrated   %s, %u ppm, %+d\n", d, s_c.frc_target, s_c.frc_correction);
     } else {
-        o += snprintf(buf + o, len - o, "Calibrated   never (FRC)\n");
+        ADD("Calibrated   never (FRC)\n");
     }
     time_t now = utc_now();
     if (now && s_c.fresh_utc) {
-        snprintf(buf + o, len - o, "Fresh air    %lld h ago (< %d ppm)", (long long)((now - s_c.fresh_utc) / 3600), FRESH_PPM);
+        ADD("Fresh air    %lld h ago (< %d ppm)\n", (long long)((now - s_c.fresh_utc) / 3600), FRESH_PPM);
     }
+    // right column: what the SCD41 needs to work
+    bool sht, p;
+    companions(&sht, &p);
+    ADD("\fNeeds\n  SHT4x   %s (T offset reference)\n  BME6xx  %s (pressure)\n\n%s\nreads ok %lu, errors %lu",
+             sht ? "ok" : "MISSING", p ? "ok" : "MISSING", s->info, (unsigned long)s->ok_count,
+             (unsigned long)s->err_count);
 }
+#undef ADD
 
 const sensor_driver_t sensor_drv_scd4x = {
     .driver = "scd4x",
