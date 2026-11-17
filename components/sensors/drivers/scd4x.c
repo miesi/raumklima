@@ -582,9 +582,11 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
         s_c.n_co2++;
     }
 
-    // difference to the reference temperature (SHT4x preferred; never ourselves)
+    // difference to the reference temperature: the primary one if it comes from an SHT4x (any
+    // address). Not a BME6xx (self-heating) and never ourselves.
     metric_t ref;
-    if (metrics_get("sht4x.temperature_c", &ref) && now_us - ref.mono_us < 10 * 1000 * 1000) {
+    if (metrics_get_primary("temperature_c", &ref) && strncmp(ref.key, "sht4", 4) == 0 &&
+        now_us - ref.mono_us < 10 * 1000 * 1000) {
         if (s_c.diff_n >= OFFSET_AVG_N) {   // keep a sliding mean
             s_c.diff_sum -= s_c.diff_sum / s_c.diff_n;
             s_c.diff_n--;
@@ -631,7 +633,9 @@ static void detail(sensor_inst_t *s, char *buf, size_t len)
 {
     metric_t m;
     size_t o = 0;
-    if (metrics_get("scd41.co2_ppm", &m) || metrics_get("scd40.co2_ppm", &m)) {
+    char key[METRIC_KEY_LEN];
+    snprintf(key, sizeof(key), "%s.co2_ppm", s->name);
+    if (metrics_get(key, &m)) {
         o += snprintf(buf + o, len - o, "CO2          %.0f ppm\n", m.value);
     }
     if (isnan(s_c.offset_c)) {
