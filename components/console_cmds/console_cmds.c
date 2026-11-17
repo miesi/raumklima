@@ -377,7 +377,7 @@ static int cmd_onewire(int argc, char **argv)
 
 static int cmd_scd41(int argc, char **argv)
 {
-    char msg[128];
+    char msg[200];
     esp_err_t err;
     if (argc == 3 && strcmp(argv[1], "offset") == 0 && strcmp(argv[2], "auto") == 0) {
         err = sensors_scd4x_offset_auto(msg, sizeof(msg));
@@ -392,6 +392,8 @@ static int cmd_scd41(int argc, char **argv)
             return 1;
         }
         err = sensors_scd4x_frc(ppm, argc == 4 && strcmp(argv[3], "force") == 0, msg, sizeof(msg));
+    } else if (argc == 2 && strcmp(argv[1], "diag") == 0) {
+        err = sensors_scd4x_diag(msg, sizeof(msg));
     } else if (argc == 2 && strcmp(argv[1], "fresh-air") == 0) {
         err = sensors_scd4x_fresh_air_start();
         strlcpy(msg, err == ESP_OK ? "started, progress on the display" : esp_err_to_name(err), sizeof(msg));
@@ -401,11 +403,30 @@ static int cmd_scd41(int argc, char **argv)
                "  scd41 offset <C>          set the temperature offset\n"
                "  scd41 offset reset        forget it, use the sensor's EEPROM value\n"
                "  scd41 frc <ppm> [force]   forced recalibration; refused unless CO2 was stable for 3 min\n"
+               "  scd41 diag                ASC state, offset, 10 s self test (no calibration change)\n"
                "  scd41 fresh-air           same as a long press on BOOT: FRC to 'set co2 outdoor' once stable\n");
         return 1;
     }
     printf("%s\n", msg);
     return err == ESP_OK ? 0 : 1;
+}
+
+static int cmd_sensor(int argc, char **argv)
+{
+    sensor_info_t si[SENSORS_MAX];
+    int n = sensors_list(si, SENSORS_MAX);
+    for (int i = 0; i < n; i++) {
+        if (argc == 2 && strcmp(argv[1], si[i].name) != 0) {
+            continue;
+        }
+        printf("%s (%s at 0x%02x): %s\n", si[i].name, si[i].model, si[i].addr, si[i].info);
+        char *buf = malloc(1024);
+        if (buf && sensors_detail(i, buf, 1024)) {
+            printf("%s\n", buf);
+        }
+        free(buf);
+    }
+    return 0;
 }
 
 static int cmd_led(int argc, char **argv)
@@ -456,6 +477,7 @@ esp_err_t console_cmds_start(void)
         {.command = "i2c", .help = "i2c scan", .func = cmd_i2c},
         {.command = "onewire", .help = "onewire scan|list|name|forget|names|selftest", .func = cmd_onewire},
         {.command = "led", .help = "led on|off", .func = cmd_led},
+        {.command = "sensor", .help = "sensor [name]: driver details (as on the display page)", .func = cmd_sensor},
         {.command = "scd41", .help = "scd41 offset|frc|fresh-air ...", .func = cmd_scd41},
         {.command = "version", .help = "firmware version", .func = cmd_version},
         {.command = "log", .help = "log on|off", .func = cmd_log},

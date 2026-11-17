@@ -42,6 +42,9 @@ static const char *TAG = "scd4x";
 #define CMD_FRC              0x362F   // idle only, 400 ms, returns correction + 0x8000
 #define CMD_SET_ASC_TARGET   0x243A   // idle only, ppm
 #define CMD_REINIT           0x3646   // idle only, 30 ms, reloads user settings from EEPROM
+#define CMD_GET_ASC_ENABLED  0x2313
+#define CMD_GET_ASC_TARGET   0x233F
+#define CMD_SELF_TEST        0x3639   // idle only, 10 s, 0 = no malfunction
 #define CMD_SERIAL           0x3682
 #define CMD_VARIANT          0x202F
 
@@ -52,13 +55,14 @@ static const char *TAG = "scd4x";
 #define STABLE_MAX_SPAN_PPM  40                          // ASSUMPTION: our threshold for "constant"
 #define SESSION_TIMEOUT_US   (30LL * 60 * 1000 * 1000)   // fresh-air session gives up after 30 min
 #define FRESH_PPM            450
+#define CO2_PLAUSIBLE_MIN    300   // below any real air (outdoor ~430): sensor problem, not data
 #define FRESH_WARN_H         156
 #define OFFSET_AVG_N         24                          // 2 min of differences for "offset auto"
 #define NVS_NS               "scd4x"
 
 static const uint8_t k_addrs[] = {0x62};
 
-typedef enum { REQ_NONE, REQ_OFFSET_AUTO, REQ_OFFSET_SET, REQ_OFFSET_RESET, REQ_FRC, REQ_FRC_FORCE } req_t;
+typedef enum { REQ_NONE, REQ_OFFSET_AUTO, REQ_OFFSET_SET, REQ_OFFSET_RESET, REQ_FRC, REQ_FRC_FORCE, REQ_DIAG } req_t;
 
 typedef struct {
     sensor_inst_t *s;
@@ -84,13 +88,14 @@ typedef struct {
     req_t req;
     float req_arg;
     esp_err_t req_err;
-    char req_msg[96];
+    char req_msg[200];
     // fresh-air session (BOOT long press)
     bool session;
     int64_t session_start_us;
     char session_msg[64];
     int64_t session_msg_until_us;
     bool asc_target_ok;
+    uint32_t implausible;           // consecutive readings below CO2_PLAUSIBLE_MIN
 } ctx_t;
 
 static ctx_t s_c;
@@ -312,6 +317,26 @@ static void handle_request(sensor_inst_t *s)
     esp_err_t err = ESP_OK;
     char *msg = s_c.req_msg;
     size_t len = sizeof(s_c.req_msg);
+    if (r == REQ_DIAG) {
+        // read-only checks; the self test does not touch the calibration
+        uint16_t asc_en = 0xffff, asc_tgt = 0xffff, st = 0xffff;
+        float off = NAN;
+        stop_periodic(s);
+        esp_err_t e1 = read_words(s, CMD_GET_ASC_ENABLED, &asc_en, 1);
+        esp_err_t e2 = read_words(s, CMD_GET_ASC_TARGET, &asc_tgt, 1);
+        read_offset(s, &off);
+        esp_err_t e3 = send(s, CMD_SELF_TEST);
+        vTaskDelay(pdMS_TO_TICKS(10500));
+        if (e3 == ESP_OK) {
+            e3 = receive_words(s, &st, 1);
+        }
+        start_periodic(s);
+        snprintf(msg, len, "ASC enabled %u (%s), ASC target %u ppm (%s), T offset %.2f C, self test %s: 0x%04x%s", asc_en,
+                 esp_err_to_name(e1), asc_tgt, esp_err_to_name(e2), off, esp_err_to_name(e3), st,
+                 st == 0 ? " = no malfunction" : " = MALFUNCTION");
+        err = e3;
+        goto out;
+    }
     if (r == REQ_OFFSET_RESET) {
         nvs_handle_t h;
         if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
@@ -453,7 +478,9 @@ static void update_warn(sensor_inst_t *s, int64_t now_us)
 {
     char w[sizeof(s->warn)] = "";
     time_t now = utc_now();
-    if (s_c.session) {
+    if (s_c.implausible) {
+        snprintf(w, sizeof(w), "SCD41: CO2 %s - sensor problem, 'scd41 diag'", "implausible (< 300 ppm)");
+    } else if (s_c.session) {
         int span;
         co2_stable(&span);
         int el = (now_us - s_c.session_start_us) / 1000000;
@@ -487,9 +514,24 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
         return -1;
     }
     float t = -45.0f + 175.0f * w[1] / 65536.0f;   // ((21875 * t) >> 13) - 45000
-    sensor_publish(s, "co2_ppm", w[0]);
     sensor_publish(s, "temperature_c", t);
     sensor_publish(s, "humidity_pct", 100.0f * w[2] / 65536.0f);   // (12500 * h) >> 13
+    if (w[0] < CO2_PLAUSIBLE_MIN) {
+        // not published: no "0 ppm" on the display, no fake fresh air, no FRC on it
+        if (s_c.implausible++ == 0) {
+            ESP_LOGE(TAG, "CO2 reading %u ppm is implausible - sensor problem, run 'scd41 diag'", w[0]);
+        }
+        sensor_publish(s, "co2_raw_ppm", w[0]);
+        s_c.n_co2 = s_c.i_co2 = 0;
+        compensate_pressure(s, now_us);
+        update_warn(s, now_us);
+        return now_us + PERIOD_US;
+    }
+    if (s_c.implausible) {
+        ESP_LOGI(TAG, "CO2 plausible again (%u ppm) after %lu implausible readings", w[0], (unsigned long)s_c.implausible);
+        s_c.implausible = 0;
+    }
+    sensor_publish(s, "co2_ppm", w[0]);
 
     s_c.co2[s_c.i_co2] = w[0];
     s_c.i_co2 = (s_c.i_co2 + 1) % STABLE_WINDOW;
@@ -594,7 +636,7 @@ static esp_err_t request(req_t r, float arg, char *msg, size_t len)
     s_c.req_arg = arg;
     s_c.req = r;
     sensors_kick(s_c.s);
-    bool ok = xSemaphoreTake(s_c.done, pdMS_TO_TICKS(10000)) == pdTRUE;
+    bool ok = xSemaphoreTake(s_c.done, pdMS_TO_TICKS(20000)) == pdTRUE;   // self test takes 10 s
     esp_err_t err = ok ? s_c.req_err : ESP_ERR_TIMEOUT;
     strlcpy(msg, ok ? s_c.req_msg : "timeout", len);
     xSemaphoreGive(s_c.lock);
@@ -609,6 +651,11 @@ esp_err_t sensors_scd4x_offset_auto(char *msg, size_t len)
 esp_err_t sensors_scd4x_offset_set(float c, char *msg, size_t len)
 {
     return request(REQ_OFFSET_SET, c, msg, len);
+}
+
+esp_err_t sensors_scd4x_diag(char *msg, size_t len)
+{
+    return request(REQ_DIAG, 0, msg, len);
 }
 
 esp_err_t sensors_scd4x_offset_reset(char *msg, size_t len)
