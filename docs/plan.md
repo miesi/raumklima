@@ -130,6 +130,8 @@ has two controllers).
 - Metrics: at most `CONFIG_HUB_METRICS_MAX` (default 64) keys. A new key in a full table takes
   the slot of the oldest stale metric (renamed or removed probe); without one it is dropped:
   error in the log, "metrics full" warning in `show status` and on the overview while it lasts.
+  Tested 2026-11-17 with the limit set to 23 (= keys in use): renaming a 1-Wire probe dropped
+  the new key (error, warning); 60 s later it replaced the stale old key and the warning cleared.
 - DS2484 (fixed address 0x18): up to `OW_MAX_DEVICES` = 8 devices on its 1-Wire bus.
   Each device = 64-bit ROM ID (shown as 16 hex digits, family code first) plus an optional
   name set on the console (`onewire name <rom> <name>`, `[a-z0-9_]`, max 15 chars, saved in
@@ -149,6 +151,10 @@ has two controllers).
 - SCD41: pressure compensation, offset auto against SHT4x (tested: 4.00 -> 4.89 C, then
   reset), FRC with 3 min / 40 ppm stability check (refusal tested; a real FRC was NOT run
   indoors on purpose), fresh-air session on BOOT long press, ASC target = outdoor value.
+  FRC plausibility (measured mean within 150 ppm of the target unless `force`) and the session
+  window tested 2026-11-17 indoors at about 1450 ppm: `scd41 frc 430` was refused by the
+  plausibility check at 65 s uptime; a session started with a full window restarted at 1/36
+  readings and, stable after 3 min, was refused (1443 ppm measured, target 430). No FRC ran.
 
 ### Networking
 
@@ -165,7 +171,11 @@ has two controllers).
 - `esp_netif_sntp` with `CONFIG_LWIP_DHCP_GET_NTP_SRV=y`. Fallback `ntp.1und1.de` as the configured
   entry; DHCP option 42 replaces it when present.
   The exact replace semantics of lwIP must be tested with and without option 42 (test 3 below).
-- `TZ` from NVS, default `UTC0` (the POSIX string for UTC).
+- `TZ` from NVS, default `UTC0` (the POSIX string for UTC). `set tz` only calls `tzset()`;
+  SNTP keeps its servers. Tested 2026-11-17: after `set tz CET-1CEST,M3.5.0,M10.5.0/3` the
+  source stayed DHCP (192.168.178.1), the clock showed CET.
+- Server names from the console live in static storage: lwIP keeps only the pointer and
+  resolves the name on every request.
 - The UI shows "not synced" until the first sync; no fake 1970 time on screen.
 
 ### Display
