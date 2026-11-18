@@ -387,7 +387,7 @@ static esp_err_t frc_checked(sensor_inst_t *s, uint16_t target, bool force, char
     s_c.frc_correction = corr;
     nvs_save();
     snprintf(msg, len, "FRC to %u ppm done, correction %+d ppm", target, corr);
-    ESP_LOGI(TAG, "%s", msg);
+    ESP_LOGI(TAG, "event=diag text=\"%s\"", msg);
     return ESP_OK;
 }
 
@@ -521,7 +521,7 @@ static void handle_request(sensor_inst_t *s)
         s_c.eeprom_offset_c = cur;
         reapply_settings(s);   // ASC target = outdoor value
         start_periodic(s);
-        ESP_LOGW(TAG, "factory reset: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "event=factory_reset err=%s", esp_err_to_name(err));
         snprintf(msg, len,
                  "factory reset: %s, sensor answers: %s, EEPROM offset now %.2f C; FRC/ASC history erased, "
                  "our FRC record and offset cleared",
@@ -625,11 +625,10 @@ static void health_log(bool cycled, uint16_t st2)
     }
     nvs_save();
     if (s_c.health_st1 == 0) {
-        ESP_LOGI(TAG, "health check (%s): self test ok", s_c.health_by_fault ? "after fault" : "timer");
+        ESP_LOGI(TAG, "event=health_check trigger=%s self_test=0x0000", s_c.health_by_fault ? "fault" : "timer");
     } else {
-        ESP_LOGW(TAG, "health check (%s): self test 0x%04x, after power_down/wake_up 0x%04x - %s",
-                 s_c.health_by_fault ? "after fault" : "timer", s_c.health_st1, st2,
-                 st2 == 0 ? "recovered" : "STILL FAILING");
+        ESP_LOGW(TAG, "event=health_check trigger=%s self_test=0x%04x after_sleep_cycle=0x%04x result=%s",
+                 s_c.health_by_fault ? "fault" : "timer", s_c.health_st1, st2, st2 == 0 ? "recovered" : "still_failing");
     }
 }
 
@@ -737,18 +736,18 @@ static esp_err_t probe(sensor_inst_t *s)
 
     if (!isnan(s_c.offset_c)) {
         esp_err_t err = write_offset(s, s_c.offset_c);
-        ESP_LOGI(TAG, "temperature offset %.2f C from NVS: %s", s_c.offset_c, esp_err_to_name(err));
+        ESP_LOGI(TAG, "event=t_offset source=nvs offset_c=%.2f err=%s", s_c.offset_c, esp_err_to_name(err));
     } else {
         float cur = NAN;
         read_offset(s, &cur);
         s_c.offset_c = NAN;
         s_c.eeprom_offset_c = cur;
-        ESP_LOGI(TAG, "temperature offset %.2f C (sensor), not adjusted - 'scd41 offset auto'", cur);
+        ESP_LOGI(TAG, "event=t_offset source=sensor offset_c=%.2f adjusted=0 hint=\"scd41 offset auto\"", cur);
     }
     esp_err_t err = send_word(s, CMD_SET_ASC_TARGET, s_c.outdoor_ppm);
     vTaskDelay(pdMS_TO_TICKS(2));
     s_c.asc_target_ok = err == ESP_OK;
-    ESP_LOGI(TAG, "ASC target %u ppm: %s", s_c.outdoor_ppm, esp_err_to_name(err));
+    ESP_LOGI(TAG, "event=asc_target ppm=%u err=%s", s_c.outdoor_ppm, esp_err_to_name(err));
 
     if (start_periodic(s) != ESP_OK) {
         return ESP_FAIL;
@@ -767,11 +766,11 @@ static void compensate_pressure(sensor_inst_t *s, int64_t now_us)
     uint16_t hpa = (uint16_t)(p.value + 0.5f);
     if (send_word(s, CMD_SET_PRESSURE, hpa) == ESP_OK) {
         if (hpa != s_c.pressure_hpa) {
-            ESP_LOGI(TAG, "ambient pressure compensation %u hPa", hpa);
+            ESP_LOGI(TAG, "event=pressure_compensation hpa=%u", hpa);
         }
         s_c.pressure_hpa = hpa;
         s_c.last_pressure_us = now_us;
-        sensor_publish(s, "pressure_comp_hpa", hpa);
+        sensor_publish_state(s, "pressure_comp_hpa", hpa);
     }
 }
 
@@ -826,7 +825,7 @@ static void update_warn(sensor_inst_t *s, int64_t now_us)
     }
     if (strcmp(w, s->warn) != 0) {
         if (w[0]) {
-            ESP_LOGW(TAG, "%s", w);
+            ESP_LOGW(TAG, "event=warning text=\"%s\"", w);
         }
         strlcpy(s->warn, w, sizeof(s->warn));
     }
@@ -847,20 +846,22 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
         s_c.session_start_us = now_us;
         s_c.session_msg[0] = '\0';
         s_c.session = true;
-        ESP_LOGI(TAG, "fresh-air calibration started, target %u ppm: needs %d stable readings (3 min) from now",
+        ESP_LOGI(TAG, "event=fresh_air_started target_ppm=%u readings_needed=%d",
                  s_c.outdoor_ppm, STABLE_WINDOW);
     }
 
     uint16_t ready;
-    if (read_words(s, CMD_DATA_READY, &ready, 1) != ESP_OK) {
-        return -1;
+    esp_err_t err = read_words(s, CMD_DATA_READY, &ready, 1);   // ESP_ERR_INVALID_CRC on a CRC mismatch
+    if (err != ESP_OK) {
+        return sensor_fail(s, err);
     }
     if ((ready & 0x07FF) == 0) {
         return now_us + 500 * 1000;   // not yet, look again soon
     }
     uint16_t w[3];
-    if (read_words(s, CMD_READ_MEASUREMENT, w, 3) != ESP_OK) {
-        return -1;
+    err = read_words(s, CMD_READ_MEASUREMENT, w, 3);
+    if (err != ESP_OK) {
+        return sensor_fail(s, err);
     }
     s_c.last_ready = ready;
     memcpy(s_c.last_raw, w, sizeof(w));
@@ -874,7 +875,7 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
     if (w[0] < CO2_PLAUSIBLE_MIN) {
         // not published: no "0 ppm" on the display, no fake fresh air, no FRC on it
         if (s_c.implausible++ == 0) {
-            ESP_LOGE(TAG, "CO2 reading %u ppm is implausible - sensor problem, run 'scd41 diag'", w[0]);
+            ESP_LOGE(TAG, "event=co2_implausible ppm=%u hint=\"scd41 diag\"", w[0]);
         }
         sensor_publish(s, "co2_raw_ppm", w[0]);
         s_c.good_streak = 0;
@@ -888,7 +889,7 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
         return now_us + PERIOD_US;
     }
     if (s_c.implausible) {
-        ESP_LOGI(TAG, "CO2 plausible again (%u ppm) after %lu implausible readings", w[0], (unsigned long)s_c.implausible);
+        ESP_LOGI(TAG, "event=co2_plausible ppm=%u after_implausible=%lu", w[0], (unsigned long)s_c.implausible);
         s_c.implausible = 0;
     }
     sensor_publish(s, "co2_ppm", w[0]);
@@ -932,13 +933,13 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
             char m[sizeof(s_c.session_msg) - sizeof("fresh-air: ") + 1];
             frc_checked(s, s_c.outdoor_ppm, false, m, sizeof(m));
             snprintf(s_c.session_msg, sizeof(s_c.session_msg), "fresh-air: %s", m);
-            ESP_LOGW(TAG, "%s", s_c.session_msg);
+            ESP_LOGW(TAG, "event=fresh_air_result text=\"%s\"", s_c.session_msg);
             s_c.session_msg_until_us = now_us + 10LL * 60 * 1000 * 1000;
         } else if (now_us - s_c.session_start_us > SESSION_TIMEOUT_US) {
             s_c.session = false;
             snprintf(s_c.session_msg, sizeof(s_c.session_msg), "fresh-air cal. rejected: CO2 not stable in 30 min");
             s_c.session_msg_until_us = now_us + 10LL * 60 * 1000 * 1000;
-            ESP_LOGW(TAG, "%s", s_c.session_msg);
+            ESP_LOGW(TAG, "event=fresh_air_result text=\"%s\"", s_c.session_msg);
         }
     }
 
@@ -1012,6 +1013,8 @@ const sensor_driver_t sensor_drv_scd4x = {
     .driver = "scd4x",
     .addrs = k_addrs,
     .n_addrs = sizeof(k_addrs),
+    .cadence_us = 5LL * 1000 * 1000,
+    .cadence_why = "periodic mode; ASC, fresh-air FRC and the T offset assume it",
     .probe = probe,
     .poll = poll,
     .detail = detail,

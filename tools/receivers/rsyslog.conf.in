@@ -1,0 +1,72 @@
+# rsyslog config for the local syslog test receiver (RFC 5424 from the hub).
+# Template: start.sh replaces @RUNDIR@ (runtime data, .receivers/ in the repo)
+# and writes the result to @RUNDIR@/rsyslog.conf. Runs as the normal user in
+# foreground mode (-n); does not read /etc/rsyslog.conf and does not touch
+# the macOS system log.
+
+global(
+  # queue files and state; must be writable by the user running rsyslogd
+  workDirectory="@RUNDIR@/rsyslog"
+  # no reverse DNS lookup of the sender; %fromhost% stays the IP
+  net.enableDNS="off"
+  # without this, rsyslog would also send its own error messages to stderr
+  processInternalMessages="on"
+  # refuse to start on any config error instead of running with parts ignored
+  abortOnUncleanConfig="on"
+)
+
+# RFC 5426: syslog over UDP, one message per datagram
+module(load="imudp")
+# RFC 6587: syslog over TCP. ptcp = plain TCP stream driver, chosen on
+# purpose for this LAN test receiver. rsyslog 8.2610 still logs the warning
+# "imtcp input uses streamdriver.mode=0 (plain TCP without TLS)" - expected.
+module(load="imtcp" streamDriver.name="ptcp")
+
+# empty address = all addresses, IPv4 and IPv6
+input(type="imudp" port="1516" ruleset="hub")
+
+input(
+  type="imtcp"
+  port="1516"
+  ruleset="hub"
+  # RFC 6587 3.4.1 octet counting ("<len> <msg>") - rsyslog detects it per
+  # frame; frames starting with "<" are taken as LF-terminated (3.4.2)
+  supportOctetCountedFraming="on"
+)
+
+# One line per message. rsyslog parses RFC 5424 first (pmrfc5424), then 3164.
+template(name="hubLine" type="list") {
+  # TIMESTAMP field of the message, not the receive time
+  property(name="timereported" dateFormat="rfc3339")
+  constant(value=" ")
+  # HOSTNAME field as sent by the device
+  property(name="hostname")
+  constant(value=" ")
+  property(name="app-name")
+  constant(value=" ")
+  # MSGID ("-" if the sender left it empty)
+  property(name="msgid")
+  constant(value=" ")
+  # emerg, alert, crit, err, warning, notice, info, debug
+  property(name="syslogseverity-text")
+  constant(value=" ")
+  # MSG part; drop a trailing LF so each message stays one line
+  property(name="msg" droplastlf="on")
+  constant(value="\n")
+}
+
+# The message exactly as received (without TCP framing), for checking the
+# RFC 5424 format the device sends.
+template(name="rawLine" type="list") {
+  property(name="rawmsg" droplastlf="on")
+  constant(value="\n")
+}
+
+# own in-memory queue: decouples the inputs from file writes
+ruleset(name="hub" queue.type="LinkedList") {
+  action(type="omfile" file="@RUNDIR@/syslog/hub.log" template="hubLine")
+  action(type="omfile" file="@RUNDIR@/syslog/hub.raw.log" template="rawLine")
+}
+
+# Default ruleset: rsyslogd's own startup and error messages.
+action(type="omfile" file="@RUNDIR@/rsyslog/rsyslogd-internal.log")

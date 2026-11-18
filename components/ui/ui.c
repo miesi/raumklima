@@ -18,6 +18,7 @@
 #include <time.h>
 
 #include "app_events.h"
+#include "appcfg.h"
 #include "board.h"
 #include "console_cmds.h"
 #include "epd.h"
@@ -36,6 +37,7 @@
 #include "lvgl.h"
 #include "metrics.h"
 #include "netmgr.h"
+#include "sched.h"
 #include "sensors.h"
 #include "timesync.h"
 
@@ -178,7 +180,7 @@ static void fmt_metric(char *buf, size_t len, const char *quantity, const char *
 {
     metric_t m;
     if (metrics_get_ambient(quantity, &m)) {
-        snprintf(buf, len, fmt, m.value);
+        snprintf(buf, len, fmt, metrics_display_value(&m));   // mean over the display interval
     } else {
         strlcpy(buf, "--", len);
     }
@@ -237,10 +239,10 @@ static void page_overview(int page, int count)
         bool has_acc = metrics_get_primary("iaq_accuracy", &acc);
         snprintf(b, sizeof(b), "IAQ (accuracy %.0f of 3)", has_acc ? acc.value : 0.0f);
         set_text(s_tile_cap[3], b);
-        snprintf(b, sizeof(b), "%.0f", m.value);
+        snprintf(b, sizeof(b), "%.0f", metrics_display_value(&m));
     } else if (metrics_get_primary("gas_ohm", &m)) {
         set_text(s_tile_cap[3], "Gas resistance (no IAQ)");
-        snprintf(b, sizeof(b), "%.0f kOhm", m.value / 1000.0f);
+        snprintf(b, sizeof(b), "%.0f kOhm", metrics_display_value(&m) / 1000.0f);
     } else {
         set_text(s_tile_cap[3], "IAQ");
         strlcpy(b, "--", sizeof(b));
@@ -269,7 +271,7 @@ static void page_overview(int page, int count)
         }
         set_text(s_tile_cap[4], b);
         if (metrics_get_primary("co2_ppm", &m)) {
-            snprintf(b, sizeof(b), "%.0f ppm", m.value);
+            snprintf(b, sizeof(b), "%.0f ppm", metrics_display_value(&m));
         } else {
             strlcpy(b, "--", sizeof(b));
         }
@@ -280,7 +282,7 @@ static void page_overview(int page, int count)
     } else if (metrics_get_primary("co2eq_ppm", &m)) {
         // no SCD41 at all: the BSEC estimate, marked as such (Thomas, 2026-11-17)
         set_text(s_tile_cap[4], "CO2 eq. (BSEC est.)");
-        snprintf(b, sizeof(b), "%.0f ppm", m.value);
+        snprintf(b, sizeof(b), "%.0f ppm", metrics_display_value(&m));
     } else {
         set_text(s_tile_cap[4], "CO2");
         strlcpy(b, "--", sizeof(b));
@@ -451,7 +453,7 @@ static void add_metric(const metric_t *m, void *arg)
     if (strncmp(m->key, ml->prefix, pl) != 0 || m->key[pl] != '.') {
         return;
     }
-    bool stale = esp_timer_get_time() - m->mono_us > METRIC_STALE_US;
+    bool stale = !metrics_is_fresh(m);
     int col = ml->n < 9 ? 0 : 1;
     char *b = ml->buf[col];
     snprintf(b + strlen(b), ml->len[col] - strlen(b), "%-18s %10.2f%s\n", m->key + pl + 1, m->value,
@@ -644,21 +646,34 @@ static void handle_key(const app_key_event_t *k)
         }
         break;
     }
-    ESP_LOGI(TAG, "key %d%s, page %d/%d", k->key, k->long_press ? " (long)" : "", s_page + 1, count);
+    ESP_LOGI(TAG, "event=key key=%d long=%d page=%d pages=%d", k->key, k->long_press, s_page + 1, count);
 }
 
-static TickType_t ticks_to_next_minute(void)
+// Display refresh: at every boundary of the display interval (60 s = start of each minute,
+// aligned to UTC once NTP synced), REFRESH_AFTER_US after it - the clock has turned and the
+// sensors without a cadence finished 100 ms before the boundary.
+#define REFRESH_AFTER_US (20LL * 1000)
+static int64_t s_last_boundary_us;
+
+static int64_t next_boundary_us(void)
 {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    int64_t ms;
-    if (tv.tv_sec > 1700000000) {
-        ms = (60 - tv.tv_sec % 60) * 1000LL - tv.tv_usec / 1000;
-    } else {
-        int64_t up = esp_timer_get_time() / 1000;
-        ms = 60000 - up % 60000;
+    appcfg_t c;
+    appcfg_get(&c);
+    int64_t b = sched_next_us(c.display_s, esp_timer_get_time() - REFRESH_AFTER_US);
+    if (b <= s_last_boundary_us) {
+        b = sched_next_us(c.display_s, s_last_boundary_us);   // woke a tick early: not this one again
     }
-    return pdMS_TO_TICKS(ms + 50);   // land just after the boundary
+    return b;
+}
+
+static TickType_t ticks_until(int64_t t_us)
+{
+    int64_t us = t_us - esp_timer_get_time();
+    if (us <= 0) {
+        return 0;
+    }
+    int64_t tick_us = portTICK_PERIOD_MS * 1000LL;
+    return (TickType_t)((us + tick_us - 1) / tick_us);   // rounded up: never before t_us
 }
 
 static void ui_task(void *arg)
@@ -667,7 +682,12 @@ static void ui_task(void *arg)
     render_and_show();
     for (;;) {
         ui_msg_t m;
-        if (xQueueReceive(s_q, &m, ticks_to_next_minute()) == pdTRUE) {
+        int64_t boundary = next_boundary_us();
+        if (xQueueReceive(s_q, &m, ticks_until(boundary + REFRESH_AFTER_US)) != pdTRUE) {
+            // interval boundary: the tiles show the means of the interval that just ended
+            s_last_boundary_us = boundary;
+            metrics_close_window(METRICS_WIN_DISPLAY);
+        } else {
             if (m.type == MSG_KEY) {
                 handle_key(&m.key);
             } else {
@@ -736,7 +756,7 @@ esp_err_t ui_start(void)
     }
     lv_display_set_buffers(s_disp, buf, NULL, buf_size, LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(s_disp, flush_cb);
-    ESP_LOGI(TAG, "LVGL %d.%d.%d, %dx%d I1, stride %d", LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH,
+    ESP_LOGI(TAG, "event=ready lvgl=%d.%d.%d width=%d height=%d format=I1 stride=%d", LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH,
              EPD_WIDTH, EPD_HEIGHT, s_stride);
 
     build_screen();

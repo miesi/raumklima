@@ -9,6 +9,7 @@
 
 #include "appcfg.h"
 #include "board.h"
+#include "carbon.h"
 #include "esp_app_desc.h"
 #include "esp_console.h"
 #include "esp_heap_caps.h"
@@ -20,6 +21,7 @@
 #include "freertos/task.h"
 #include "i2cbus.h"
 #include "metrics.h"
+#include "netlog.h"
 #include "netmgr.h"
 #include "onewire.h"
 #include "sensors.h"
@@ -57,8 +59,16 @@ static const char *reset_reason(void)
 static void print_metric(const metric_t *m, void *arg)
 {
     int64_t age_s = (esp_timer_get_time() - m->mono_us) / 1000000;
-    printf("  %-28s %12.2f   age %llds%s\n", m->key, m->value, (long long)age_s,
-           age_s * 1000000 > METRIC_STALE_US ? " STALE" : "");
+    const metric_win_t *w = &m->win[METRICS_WIN_DISPLAY];
+    printf("  %-28s %12.2f   age %llds%s", m->key, m->value, (long long)age_s, metrics_is_fresh(m) ? "" : " STALE");
+    if (m->state) {
+        printf("   (state)\n");
+    } else if (w->n) {
+        // the last closed display interval: what the display shows
+        printf("   interval n=%lu mean %.2f min %.2f max %.2f\n", (unsigned long)w->n, w->mean, w->min, w->max);
+    } else {
+        printf("\n");
+    }
 }
 
 static void show_status(void)
@@ -138,11 +148,47 @@ static void show_status(void)
         board_i2c_idle_levels(b, &sda, &scl);
         printf("i2c bus %d  SDA=GPIO%d SCL=GPIO%d, idle levels at boot SDA=%d SCL=%d\n", b + 1, psda, pscl, sda, scl);
     }
+    appcfg_t c;
+    appcfg_get(&c);
+    uint32_t cyc = sensors_read_ms();
+    printf("intervals  display %u s, carbon %u s, sensors %d s (read cycle max %lu ms)\n", c.display_s, c.carbon_s,
+           sensors_interval_s(), (unsigned long)cyc);
     sensor_info_t si[SENSORS_MAX];
     int ns = sensors_list(si, SENSORS_MAX);
     for (int i = 0; i < ns; i++) {
         printf("sensor     %d:0x%02x %-8s as %-8s ok %" PRIu32 " err %" PRIu32 "  %s%s\n", si[i].bus + 1, si[i].addr, si[i].model,
                si[i].name, si[i].ok_count, si[i].err_count, si[i].supported ? "" : "NOT SUPPORTED ", si[i].info);
+        if (!si[i].supported) {
+            continue;
+        }
+        if (si[i].cadence_us) {
+            printf("             own cadence %lld s", si[i].cadence_us / 1000000);
+        } else {
+            printf("             read %lu ms (max %lu ms) per interval", (unsigned long)si[i].read_ms,
+                   (unsigned long)si[i].read_ms_max);
+        }
+        printf("%s%s\n", si[i].last_err ? ", failing: " : "", si[i].last_err ? esp_err_to_name(si[i].last_err) : "");
+    }
+    carbon_status_t cs;
+    carbon_get_status(&cs);
+    if (!cs.enabled) {
+        printf("carbon     off\n");
+    } else {
+        printf("carbon     %s:%u%s, sent %lu batches / %lu lines, buffered %lu (%lu bytes), dropped %lu, errors %lu%s%s\n",
+               c.carbon_host, c.carbon_port, cs.waiting_clock ? " (waiting for NTP)" : "", (unsigned long)cs.sent_batches,
+               (unsigned long)cs.sent_lines, (unsigned long)cs.buffered_batches, (unsigned long)cs.buffered_bytes,
+               (unsigned long)cs.dropped_batches, (unsigned long)cs.errors, cs.last_error[0] ? ", last: " : "",
+               cs.last_error);
+    }
+    netlog_status_t ls;
+    netlog_get_status(&ls);
+    if (!ls.enabled) {
+        printf("syslog     off (buffering %lu lines)\n", (unsigned long)ls.buffered);
+    } else {
+        printf("syslog     %s:%u/%s%s, sent %lu, buffered %lu, dropped %lu, errors %lu%s%s\n", c.syslog_host,
+               c.syslog_port, c.syslog_tcp ? "tcp" : "udp", ls.waiting_clock ? " (waiting for NTP)" : "",
+               (unsigned long)ls.sent, (unsigned long)ls.buffered, (unsigned long)ls.dropped, (unsigned long)ls.errors,
+               ls.last_error[0] ? ", last: " : "", ls.last_error);
     }
     char warn[320];
     sensors_warnings(warn, sizeof(warn));
@@ -151,6 +197,16 @@ static void show_status(void)
     }
     printf("metrics\n");
     metrics_foreach(print_metric, NULL);
+}
+
+static const char *sev_name(int sev)
+{
+    switch (sev) {
+    case APPCFG_SEV_ERROR: return "error";
+    case APPCFG_SEV_WARNING: return "warning";
+    case APPCFG_SEV_DEBUG: return "debug";
+    default: return "info";
+    }
 }
 
 static void show_config(void)
@@ -166,6 +222,19 @@ static void show_config(void)
     } else {
         printf("ntp        dhcp (fallback %s)\n", TIMESYNC_FALLBACK);
     }
+    printf("interval   display %u s, carbon %u s\n", c.display_s, c.carbon_s);
+    if (c.carbon_host[0]) {
+        printf("carbon     %s port %u prefix %s\n", c.carbon_host, c.carbon_port, c.carbon_prefix);
+    } else {
+        printf("carbon     off (prefix %s)\n", c.carbon_prefix);
+    }
+    if (c.syslog_host[0]) {
+        printf("syslog     %s port %u %s, level %s\n", c.syslog_host, c.syslog_port, c.syslog_tcp ? "tcp" : "udp",
+               sev_name(c.syslog_level));
+    } else {
+        printf("syslog     off\n");
+    }
+    printf("prefer     %s (carbon, syslog)\n", c.prefer_v4 ? "IPv4" : "IPv6");
     printf("%s\n", appcfg_dirty() ? "UNSAVED changes - 'save' to keep them" : "saved");
 }
 
@@ -235,6 +304,69 @@ static int report(esp_err_t err, const char *what)
     return 0;
 }
 
+// "set interval": checks and hints. Errors refuse the value, hints only explain.
+static void interval_help(void)
+{
+    appcfg_t c;
+    appcfg_get(&c);
+    static char help[640];
+    sensors_cadence_help(help, sizeof(help));
+    printf("usage: set interval display|carbon <%d..%d s>   (now display %u s, carbon %u s)\n\n"
+           "display  the panel refreshes at every boundary of this interval (60 s = at the start of\n"
+           "         every minute, aligned to UTC once NTP synced) and shows the mean of the readings\n"
+           "         in the interval.\n"
+           "carbon   at every boundary one batch goes to Carbon: mean, and min/max where the interval\n"
+           "         held more than one reading.\n"
+           "sensors  sensors without a cadence of their own are read once per sensor interval = the\n"
+           "         shorter of the two, so that the read ends 100 ms before the boundary. Sensors\n"
+           "         with a cadence keep it - their algorithm or calibration depends on it:\n%s"
+           "Best: one interval a multiple of the other (60/60, 30/60, 60/300).\n",
+           APPCFG_INTERVAL_MIN, APPCFG_INTERVAL_MAX, c.display_s, c.carbon_s, help);
+}
+
+static int set_interval(int argc, char **argv)
+{
+    if (argc != 4 || (strcmp(argv[2], "display") != 0 && strcmp(argv[2], "carbon") != 0)) {
+        interval_help();
+        return argc == 2 ? 0 : 1;   // plain "set interval" asks for the explanation
+    }
+    bool disp = strcmp(argv[2], "display") == 0;
+    int v = atoi(argv[3]);
+    if (v < APPCFG_INTERVAL_MIN || v > APPCFG_INTERVAL_MAX) {
+        printf("error: %d..%d s\n", APPCFG_INTERVAL_MIN, APPCFG_INTERVAL_MAX);
+        return 1;
+    }
+    // the read cycle of the sensors without a cadence plus its lead must fit into an interval
+    uint32_t need_ms = sensors_read_ms() + 100;
+    if ((uint32_t)v * 1000 < need_ms) {
+        printf("error: reading the sensors takes up to %lu ms (incl. 100 ms lead), %d s is shorter\n",
+               (unsigned long)need_ms, v);
+        return 1;
+    }
+    if (report(appcfg_set_intervals(disp ? v : 0, disp ? 0 : v), "set interval")) {
+        return 1;
+    }
+    appcfg_t c;
+    appcfg_get(&c);
+    int lo = c.display_s < c.carbon_s ? c.display_s : c.carbon_s;
+    int hi = c.display_s < c.carbon_s ? c.carbon_s : c.display_s;
+    printf("display %u s, carbon %u s: sensors without a cadence are read every %d s\n", c.display_s, c.carbon_s, lo);
+    if (hi % lo != 0) {
+        printf("note: %d s is not a multiple of %d s. That works, but is not recommended: the boundaries\n"
+               "      drift against each other, so a %s interval holds sometimes %d, sometimes %d readings,\n"
+               "      and %s lags up to %d s behind the reading.\n",
+               hi, lo, c.display_s > c.carbon_s ? "display" : "carbon", hi / lo, hi / lo + 1,
+               c.display_s > c.carbon_s ? "the display" : "Carbon", lo - 1);
+    }
+    if (c.display_s % 60 != 0 && 60 % c.display_s != 0) {
+        printf("note: the clock shows minutes; with %u s it changes up to %u s after the minute turns\n", c.display_s,
+               c.display_s - 1);
+    }
+    sensors_reschedule();
+    carbon_reschedule();
+    return 0;
+}
+
 static int cmd_set(int argc, char **argv)
 {
     if (argc >= 4 && strcmp(argv[1], "wifi") == 0) {
@@ -277,13 +409,65 @@ static int cmd_set(int argc, char **argv)
         }
         return 0;
     }
+    if (argc >= 2 && strcmp(argv[1], "interval") == 0) {
+        return set_interval(argc, argv);
+    }
+    if (argc >= 3 && strcmp(argv[1], "carbon") == 0) {
+        esp_err_t err;
+        if (strcmp(argv[2], "off") == 0) {
+            err = appcfg_set_carbon(NULL, 0, NULL);
+        } else {
+            err = appcfg_set_carbon(argv[2], argc >= 4 ? atoi(argv[3]) : 0, argc >= 5 ? argv[4] : NULL);
+        }
+        if (report(err, "set carbon <host> [port] [prefix] (prefix: [A-Za-z0-9_-] nodes with dots)")) {
+            return 1;
+        }
+        carbon_reschedule();
+        return 0;
+    }
+    if (argc >= 3 && strcmp(argv[1], "syslog") == 0) {
+        esp_err_t err;
+        if (strcmp(argv[2], "level") == 0 && argc == 4) {
+            int sev = strcmp(argv[3], "error") == 0     ? APPCFG_SEV_ERROR
+                      : strcmp(argv[3], "warning") == 0 ? APPCFG_SEV_WARNING
+                      : strcmp(argv[3], "info") == 0    ? APPCFG_SEV_INFO
+                      : strcmp(argv[3], "debug") == 0   ? APPCFG_SEV_DEBUG
+                                                        : -1;
+            err = appcfg_set_syslog_level(sev);
+        } else if (strcmp(argv[2], "off") == 0) {
+            err = appcfg_set_syslog(NULL, 0, false);
+        } else {
+            bool tcp = argc >= 5 && strcmp(argv[4], "tcp") == 0;
+            if (argc >= 5 && !tcp && strcmp(argv[4], "udp") != 0) {
+                err = ESP_ERR_INVALID_ARG;
+            } else {
+                err = appcfg_set_syslog(argv[2], argc >= 4 ? atoi(argv[3]) : 0, tcp);
+            }
+        }
+        if (report(err, "set syslog <host> [port] [udp|tcp] | off | level error|warning|info|debug")) {
+            return 1;
+        }
+        netlog_apply();
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "prefer") == 0 && (strcmp(argv[2], "v4") == 0 || strcmp(argv[2], "v6") == 0)) {
+        appcfg_set_prefer_v4(strcmp(argv[2], "v4") == 0);
+        return 0;
+    }
     printf("usage:\n"
            "  set wifi <ssid> <psk>          WPA2/WPA3 personal\n"
            "  set hostname <name>            DHCP option 12\n"
            "  set tz <posix>                 e.g. UTC0 or CET-1CEST,M3.5.0,M10.5.0/3\n"
            "  set ntp <server> [<server>]    overrides DHCP option 42\n"
            "  set ntp dhcp                   back to DHCP option 42 / fallback\n"
-           "  set co2 outdoor <ppm>          fresh-air target for the SCD41 (default 430)\n");
+           "  set co2 outdoor <ppm>          fresh-air target for the SCD41 (default 430)\n"
+           "  set interval display|carbon <s>   %d..%d s, default %d ('set interval' explains)\n"
+           "  set carbon <host> [port] [prefix] Graphite plaintext, TCP, default port %d\n"
+           "  set carbon off\n"
+           "  set syslog <host> [port] [udp|tcp]  RFC 5424, default port %d udp\n"
+           "  set syslog off | level error|warning|info|debug\n"
+           "  set prefer v6|v4               address family tried first (carbon, syslog)\n",
+           APPCFG_INTERVAL_MIN, APPCFG_INTERVAL_MAX, APPCFG_INTERVAL_DEFAULT, APPCFG_CARBON_PORT, APPCFG_SYSLOG_PORT);
     return 1;
 }
 
@@ -584,10 +768,11 @@ static int cmd_version(int argc, char **argv)
 
 static int cmd_log(int argc, char **argv)
 {
+    // console only; what goes to syslog is set with "set syslog level"
     if (argc == 2 && strcmp(argv[1], "off") == 0) {
-        esp_log_level_set("*", ESP_LOG_WARN);
+        netlog_set_console_level(ESP_LOG_WARN);
     } else if (argc == 2 && strcmp(argv[1], "on") == 0) {
-        esp_log_level_set("*", ESP_LOG_INFO);
+        netlog_set_console_level(ESP_LOG_INFO);
     } else {
         printf("usage: log on|off   (off = warnings and errors only)\n");
         return 1;

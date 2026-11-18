@@ -29,6 +29,8 @@ typedef struct {
     timesync_source_t source;
     char server[TIMESYNC_SLOTS][48];   // "" = slot unused
     uint8_t reach[TIMESYNC_SLOTS];     // lwIP reachability shift register per slot
+    bool offset_valid;           // two syncs seen
+    int64_t offset_us;           // last sync: NTP time minus our clock (drift since the sync before)
 } timesync_status_t;
 
 // Sets TZ, starts SNTP. Call after netmgr_start().

@@ -33,7 +33,7 @@ static void notify(void)
 
 static void retry_cb(void *arg)
 {
-    ESP_LOGI(TAG, "reconnecting");
+    ESP_LOGI(TAG, "event=reconnecting");
     esp_wifi_connect();
 }
 
@@ -69,7 +69,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
         appcfg_t c;
         appcfg_get(&c);
         if (c.wifi_ssid[0] == '\0') {
-            ESP_LOGW(TAG, "no WLAN configured - use 'set wifi <ssid> <psk>' on the console");
+            ESP_LOGW(TAG, "event=no_wifi_config hint=\"set wifi <ssid> <psk>\"");
             return;
         }
         esp_wifi_connect();
@@ -77,7 +77,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
     }
     case WIFI_EVENT_STA_CONNECTED: {
         const wifi_event_sta_connected_t *e = data;
-        ESP_LOGI(TAG, "associated with '%.*s' channel %d", e->ssid_len, (const char *)e->ssid, e->channel);
+        ESP_LOGI(TAG, "event=associated ssid=\"%.*s\" channel=%d", e->ssid_len, (const char *)e->ssid, e->channel);
         // SLAAC needs a link-local address first
         esp_netif_create_ip6_linklocal(s_netif);
         xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -106,7 +106,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (s_stopping) {
             return;
         }
-        ESP_LOGW(TAG, "disconnected, reason %d, retry in %lu ms", e->reason, (unsigned long)s_backoff_ms);
+        ESP_LOGW(TAG, "event=disconnected reason=%d retry_ms=%lu", e->reason, (unsigned long)s_backoff_ms);
         esp_timer_stop(s_retry_timer);
         esp_timer_start_once(s_retry_timer, (uint64_t)s_backoff_ms * 1000);
         s_backoff_ms = s_backoff_ms * 2 > BACKOFF_MAX_MS ? BACKOFF_MAX_MS : s_backoff_ms * 2;
@@ -149,7 +149,7 @@ static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_st.dns4[0] = d0.ip.u_addr.ip4;
         s_st.dns4[1] = d1.ip.u_addr.ip4;
         xSemaphoreGive(s_lock);
-        ESP_LOGI(TAG, "IPv4 " IPSTR "/" IPSTR " gw " IPSTR, IP2STR(&e->ip_info.ip), IP2STR(&e->ip_info.netmask),
+        ESP_LOGI(TAG, "event=ipv4 addr=" IPSTR " mask=" IPSTR " gw=" IPSTR, IP2STR(&e->ip_info.ip), IP2STR(&e->ip_info.netmask),
                  IP2STR(&e->ip_info.gw));
         notify();
     } else if (id == IP_EVENT_GOT_IP6) {
@@ -157,7 +157,7 @@ static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (e->esp_netif != s_netif) {
             return;
         }
-        ESP_LOGI(TAG, "IPv6 " IPV6STR, IPV62STR(e->ip6_info.ip));
+        ESP_LOGI(TAG, "event=ipv6 addr=" IPV6STR, IPV62STR(e->ip6_info.ip));
         refresh_ip6();
         notify();
     } else if (id == IP_EVENT_STA_LOST_IP) {
@@ -293,9 +293,9 @@ static void dns_task(void *arg)
                 s_dns[i].when_us = esp_timer_get_time();
                 if (!was || was_ok != (rc == 0)) {
                     if (rc == 0) {
-                        ESP_LOGI(TAG, "DNS %s %s -> %s", s_dns[i].label, name, addr);
+                        ESP_LOGI(TAG, "event=dns_ok label=%s name=%s addr=%s", s_dns[i].label, name, addr);
                     } else {
-                        ESP_LOGW(TAG, "DNS %s %s does not resolve (getaddrinfo %d)", s_dns[i].label, name, rc);
+                        ESP_LOGW(TAG, "event=dns_failed label=%s name=%s getaddrinfo=%d", s_dns[i].label, name, rc);
                     }
                 }
             }

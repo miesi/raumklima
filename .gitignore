@@ -48,3 +48,6 @@ __pycache__/
 
 # --- Claude Code local settings (personal, not shared) ---
 .claude/settings.local.json
+
+# --- local test receivers (tools/receivers/): whisper files, logs, pid files ---
+.receivers/

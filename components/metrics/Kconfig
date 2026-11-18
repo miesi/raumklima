@@ -1,7 +1,7 @@
 menu "Metrics"
     config HUB_METRICS_MAX
         int "Maximum number of metric keys"
-        default 64
+        default 128
         range 8 256
         help
             Table full: a new key replaces the oldest stale one (a renamed or removed probe);

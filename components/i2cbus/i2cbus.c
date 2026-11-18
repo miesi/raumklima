@@ -24,7 +24,7 @@ esp_err_t i2cbus_init(void)
             .flags.enable_internal_pullup = true,   // weak (~45 kOhm); the breakouts carry the real pull-ups
         };
         esp_err_t err = i2c_new_master_bus(&cfg, &s_bus[b]);
-        ESP_LOGI(TAG, "bus %d on SDA=GPIO%d SCL=GPIO%d %lu Hz: %s", b + 1, sda, scl,
+        ESP_LOGI(TAG, "event=init bus=%d sda_gpio=%d scl_gpio=%d hz=%lu err=%s", b + 1, sda, scl,
                  (unsigned long)CONFIG_HUB_I2C_FREQ_HZ, esp_err_to_name(err));
         if (err == ESP_OK) {
             s_n = b + 1;

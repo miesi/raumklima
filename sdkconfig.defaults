@@ -51,3 +51,10 @@ CONFIG_LV_DRAW_SW_I1_LUM_THRESHOLD=127
 CONFIG_LV_USE_CLIB_MALLOC=y
 CONFIG_LV_USE_CLIB_STRING=y
 CONFIG_LV_USE_CLIB_SPRINTF=y
+
+# Logging: debug lines are compiled in so "set syslog level debug" can send them; the runtime
+# default stays info (console and syslog)
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# Metrics: sensor values plus read_ms/read_errors per sensor plus ~20 hub.* self monitoring keys
+CONFIG_HUB_METRICS_MAX=128

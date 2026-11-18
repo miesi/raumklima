@@ -113,7 +113,61 @@ overview tiles.
 Warnings on the overview: condensation risk when any measured temperature is within 1 K of the
 dew point computed from the SHT4x; sensor limits; SCD41 faults and missing companions;
 ventilation hint.
-The network page shows whether the configured host names (NTP) resolve.
+The network page shows whether the configured host names (NTP, Carbon, syslog) resolve.
+
+## Intervals, Carbon and syslog
+
+`set interval` (without arguments) explains the timing on the device.
+
+- **Display interval** (default 60 s, 10..3600): the panel refreshes at every boundary, 20 ms
+  after it - with 60 s at the start of every minute, aligned to UTC once NTP synced. Tiles show
+  the mean of the readings in the interval. Keys still redraw at once.
+- **Carbon interval** (default 60 s, 10..3600): at every boundary one batch is buffered and sent
+  (Graphite plaintext over TCP), time stamp = the boundary in UTC.
+- **Sensors with a cadence of their own** keep it: BME680/BME690 every 3 s (BSEC LP mode,
+  +-6.25 %), SCD41 every 5 s (periodic mode; ASC, the fresh-air FRC and the temperature offset
+  assume it). **All other sensors** (SHT4x, BH1750, DS2484 with its DS18B20) are read once per
+  sensor interval = the shorter of the two intervals, in one cycle that ends 100 ms before the
+  boundary. Its duration is measured (`show status`); an interval shorter than the read cycle
+  is refused. One interval not a multiple of the other works, but gives a note: it is not
+  recommended.
+
+Carbon paths: `<prefix>.<hostname>.<instance>.<quantity>` = mean over the Carbon interval;
+`..._min` and `..._max` only if the interval held more than one reading. With the defaults
+(60/60) that means: min/max for BME and SCD41 (own cadence), none for SHT4x (and its dew
+point), BH1750 and 1-Wire; with display 30 / Carbon 60 those get min/max too. States
+(IAQ accuracy, BSEC status, the SCD41 pressure setting, counters) send their last value. The
+window from boot to the first boundary is not sent (partial). Self monitoring under
+`<prefix>.<hostname>.hub.*`: uptime, reset reason, free heap and PSRAM, RSSI, reconnects, NTP
+syncs and offset, send errors and buffer fill of Carbon and syslog, read errors and read time
+per sensor. Batches are buffered in PSRAM (2 MB) while the receiver is unreachable and before
+the first NTP sync, then sent with their original time stamps; a reboot loses the buffer.
+
+Syslog: RFC 5424 over UDP (RFC 5426) or TCP with octet counting (RFC 6587), facility local0.
+Every ESP_LOG line goes there, with its subsystem (a component such as `timesync`, `carbon`,
+or a sensor instance such as `sht4x`, `scd41`) as MSGID and at the start of the message, then
+key=value pairs:
+
+```
+<132>1 2026-11-18T21:40:00.012Z hub-e1a418 raumklima-hub - sht4x - sht4x: event=read_failed model=SHT4x bus=1 addr=0x44 err=ESP_ERR_INVALID_CRC errors=1 streak=1
+```
+
+Lines are buffered from boot on (512 lines, PSRAM) and sent once the clock is set.
+
+```
+set carbon <host> [port] [prefix]      default port 2003, prefix raumklima; "set carbon off"
+set syslog <host> [port] [udp|tcp]     default port 514 udp; "set syslog off"
+set syslog level error|warning|info|debug
+set prefer v6|v4                       address family tried first (default IPv6)
+save
+```
+
+`log on|off` only changes the console. Plain text only for now; TLS (with client certificates)
+is possible for syslog, not directly for go-carbon - see `docs/plan.md`.
+
+Local test receivers on a Mac: `tools/receivers/start.sh` (go-carbon on 2003, HTTP API on
+127.0.0.1:8080; rsyslogd on 1516 UDP/TCP), data in `.receivers/` (git-ignored),
+`tools/receivers/stop.sh`. go-carbon is built from a checkout in `../go-carbon`.
 
 ## Display and keys
 

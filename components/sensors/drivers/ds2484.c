@@ -44,7 +44,6 @@ static const char *TAG = "ds2484";
 #define DS18B20_CONVERT_T    0x44
 #define DS18B20_READ_SCRATCH 0xBE
 #define CONVERT_MS           800                        // 12 bit: 750 ms max (ASSUMPTION, DS18B20 datasheet)
-#define PERIOD_US            (10LL * 1000 * 1000)
 #define RESCAN_US            (10LL * 60 * 1000 * 1000)  // pick up added/removed probes
 
 static const uint8_t k_addrs[] = {0x18};
@@ -116,7 +115,7 @@ static esp_err_t op_reset(void *ctx, bool *presence)
         err = wait_idle(c, &st);
     }
     if (err == ESP_OK && (st & STS_SD)) {
-        ESP_LOGW(TAG, "1-Wire short detected");
+        ESP_LOGW(TAG, "event=short_detected");
         return ESP_FAIL;
     }
     *presence = err == ESP_OK && (st & STS_PPD);
@@ -181,7 +180,7 @@ static void scan(ctx_t *c)
     if (c->found > OW_MAX_DEVICES) {
         snprintf(c->s->warn, sizeof(c->s->warn), "%d%s 1-Wire devices, max %d", c->found,
                  c->found >= OW_SEARCH_LIMIT ? "+" : "", OW_MAX_DEVICES);
-        ESP_LOGE(TAG, "%d%s 1-Wire devices found, max %d - using the first %d in search order", c->found,
+        ESP_LOGE(TAG, "event=too_many_devices found=%d%s max=%d using_first=%d", c->found,
                  c->found >= OW_SEARCH_LIMIT ? "+" : "",
                  OW_MAX_DEVICES, OW_MAX_DEVICES);
     } else {
@@ -190,9 +189,9 @@ static void scan(ctx_t *c)
     snprintf(c->s->info, sizeof(c->s->info), "%d 1-Wire device(s)", c->found);
     xSemaphoreGive(c->lock);
     if (found < 0) {
-        ESP_LOGW(TAG, "search failed");
+        ESP_LOGW(TAG, "event=search_failed");
     } else {
-        ESP_LOGI(TAG, "search: %d device(s)", found);
+        ESP_LOGI(TAG, "event=search devices=%d", found);
     }
     c->last_scan_us = esp_timer_get_time();
     c->rescan = false;
@@ -242,18 +241,27 @@ static esp_err_t probe(sensor_inst_t *s)
 static int64_t poll(sensor_inst_t *s, int64_t now_us)
 {
     ctx_t *c = s->ctx;
-    if (c->rescan || now_us - c->last_scan_us > RESCAN_US) {
-        scan(c);
+    if (c->last_scan_us == 0) {
+        scan(c);   // first cycle: find the probes before reading them; later searches: after_cycle()
     }
     if (c->n == 0) {
-        return now_us + PERIOD_US;
+        return SENSOR_DONE;
     }
     if (!c->converting) {
         // all probes convert at once
-        bool presence;
-        if (op_reset(c, &presence) != ESP_OK || !presence || op_write(c, OW_CMD_SKIP_ROM) != ESP_OK ||
-            op_write(c, DS18B20_CONVERT_T) != ESP_OK) {
-            return -1;
+        bool presence = false;
+        esp_err_t err = op_reset(c, &presence);
+        if (err == ESP_OK && !presence) {
+            err = ESP_ERR_NOT_FOUND;   // no presence pulse: nothing on the 1-Wire bus
+        }
+        if (err == ESP_OK) {
+            err = op_write(c, OW_CMD_SKIP_ROM);
+        }
+        if (err == ESP_OK) {
+            err = op_write(c, DS18B20_CONVERT_T);
+        }
+        if (err != ESP_OK) {
+            return sensor_fail(s, err);
         }
         c->converting = true;
         return now_us + CONVERT_MS * 1000LL;
@@ -277,6 +285,8 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
         if (err != ESP_OK || ow_crc8(sp, 8) != sp[8]) {
             p->crc_errors++;
             p->valid = false;
+            ESP_LOGW(s->name, "event=probe_failed probe=%s rom=%016llx err=%s crc_errors=%lu", p->name,
+                     (unsigned long long)p->rom, err != ESP_OK ? esp_err_to_name(err) : "CRC", (unsigned long)p->crc_errors);
         } else {
             p->temp_c = (int16_t)((sp[1] << 8) | sp[0]) / 16.0f;   // 12 bit, 0.0625 C per LSB
             p->valid = true;
@@ -287,7 +297,16 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
             sensor_publish_as(p->name, "temperature_c", p->temp_c);
         }
     }
-    return ok > 0 ? now_us + PERIOD_US - CONVERT_MS * 1000LL : -1;
+    return ok > 0 ? SENSOR_DONE : sensor_fail(s, ESP_ERR_INVALID_CRC);
+}
+
+// after a read cycle, outside its timed part: a requested search or the periodic one
+static void after_cycle(sensor_inst_t *s)
+{
+    ctx_t *c = s->ctx;
+    if (c->rescan || esp_timer_get_time() - c->last_scan_us > RESCAN_US) {
+        scan(c);
+    }
 }
 
 static void detail(sensor_inst_t *s, char *buf, size_t len)
@@ -324,6 +343,7 @@ const sensor_driver_t sensor_drv_ds2484 = {
     .n_addrs = sizeof(k_addrs),
     .probe = probe,
     .poll = poll,
+    .after_cycle = after_cycle,
     .detail = detail,
 };
 

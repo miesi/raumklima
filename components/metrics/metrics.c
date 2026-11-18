@@ -11,8 +11,16 @@
 
 static const char *TAG = "metrics";
 
+typedef struct {
+    double sum;
+    float min, max;
+    uint32_t n;
+} acc_t;
+
 static metric_t s_m[METRICS_MAX];
+static acc_t s_acc[METRICS_MAX][METRICS_WIN_COUNT];   // open windows
 static int s_n;
+static int64_t s_stale_us = 60LL * 1000 * 1000;
 static SemaphoreHandle_t s_lock;
 static int64_t s_dropped_us;            // last time a new key found no slot, 0 = never
 static char s_dropped_key[METRIC_KEY_LEN];
@@ -34,14 +42,14 @@ static int stale_slot(int64_t now)
 {
     int best = -1;
     for (int i = 0; i < s_n; i++) {
-        if (now - s_m[i].mono_us >= METRIC_STALE_US && (best < 0 || s_m[i].mono_us < s_m[best].mono_us)) {
+        if (now - s_m[i].mono_us >= s_stale_us && (best < 0 || s_m[i].mono_us < s_m[best].mono_us)) {
             best = i;
         }
     }
     return best;
 }
 
-void metrics_publish(const char *key, float value)
+static void publish(const char *key, float value, bool state)
 {
     int64_t now = esp_timer_get_time();
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -55,11 +63,11 @@ void metrics_publish(const char *key, float value)
         if (s_n < METRICS_MAX) {
             s_n++;
         } else if ((i = stale_slot(now)) >= 0) {
-            ESP_LOGW(TAG, "table full (%d): %s replaces stale %s", METRICS_MAX, key, s_m[i].key);
+            ESP_LOGW(TAG, "event=table_full max=%d key=%s replaces_stale=%s", METRICS_MAX, key, s_m[i].key);
         } else {
             // the metrics that are there keep working; say so once per episode, not per reading
-            if (s_dropped_us == 0 || now - s_dropped_us > METRIC_STALE_US) {
-                ESP_LOGE(TAG, "table full (%d fresh metrics), dropping %s - raise CONFIG_HUB_METRICS_MAX",
+            if (s_dropped_us == 0 || now - s_dropped_us > s_stale_us) {
+                ESP_LOGE(TAG, "event=table_full max=%d dropped=%s hint=\"raise CONFIG_HUB_METRICS_MAX\"",
                          METRICS_MAX, key);
             }
             s_dropped_us = now;
@@ -67,18 +75,73 @@ void metrics_publish(const char *key, float value)
             xSemaphoreGive(s_lock);
             return;
         }
+        memset(&s_m[i], 0, sizeof(s_m[i]));
+        memset(s_acc[i], 0, sizeof(s_acc[i]));
         strlcpy(s_m[i].key, key, METRIC_KEY_LEN);
     }
     s_m[i].value = value;
     s_m[i].mono_us = now;
     s_m[i].utc = utc_now();
+    s_m[i].state = state;
+    for (int w = 0; w < METRICS_WIN_COUNT; w++) {
+        acc_t *a = &s_acc[i][w];
+        if (a->n == 0 || value < a->min) {
+            a->min = value;
+        }
+        if (a->n == 0 || value > a->max) {
+            a->max = value;
+        }
+        a->sum += value;
+        a->n++;
+    }
     xSemaphoreGive(s_lock);
+}
+
+void metrics_publish(const char *key, float value)
+{
+    publish(key, value, false);
+}
+
+void metrics_publish_state(const char *key, float value)
+{
+    publish(key, value, true);
+}
+
+void metrics_set_stale_us(int64_t us)
+{
+    s_stale_us = us;
+}
+
+int64_t metrics_stale_us(void)
+{
+    return s_stale_us;
+}
+
+void metrics_close_window(metrics_win_id_t id)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < s_n; i++) {
+        acc_t *a = &s_acc[i][id];
+        metric_win_t *w = &s_m[i].win[id];
+        w->n = a->n;
+        w->mean = a->n ? (float)(a->sum / a->n) : 0;
+        w->min = a->min;
+        w->max = a->max;
+        memset(a, 0, sizeof(*a));
+    }
+    xSemaphoreGive(s_lock);
+}
+
+float metrics_display_value(const metric_t *m)
+{
+    const metric_win_t *w = &m->win[METRICS_WIN_DISPLAY];
+    return (!m->state && w->n > 0) ? w->mean : m->value;
 }
 
 bool metrics_overflow(char *key, size_t len)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    bool recent = s_dropped_us != 0 && esp_timer_get_time() - s_dropped_us <= METRIC_STALE_US;
+    bool recent = s_dropped_us != 0 && esp_timer_get_time() - s_dropped_us <= s_stale_us;
     if (recent) {
         strlcpy(key, s_dropped_key, len);
     }
@@ -86,9 +149,14 @@ bool metrics_overflow(char *key, size_t len)
     return recent;
 }
 
+bool metrics_is_fresh(const metric_t *m)
+{
+    return esp_timer_get_time() - m->mono_us < s_stale_us;
+}
+
 static bool fresh(const metric_t *m)
 {
-    return esp_timer_get_time() - m->mono_us < METRIC_STALE_US;
+    return metrics_is_fresh(m);
 }
 
 bool metrics_get(const char *key, metric_t *out)

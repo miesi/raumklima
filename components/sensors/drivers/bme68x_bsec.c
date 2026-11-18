@@ -121,7 +121,7 @@ static esp_err_t probe(sensor_inst_t *s)
     c->dev.amb_temp = 22;
     int8_t r = bme68x_init(&c->dev);
     if (r != BME68X_OK) {
-        ESP_LOGE(TAG, "bme68x_init: %d", r);
+        ESP_LOGE(TAG, "event=init_failed call=bme68x_init result=%d", r);
         return ESP_FAIL;
     }
     const char *why = "no BSEC config for this variant";
@@ -137,7 +137,7 @@ static esp_err_t probe(sensor_inst_t *s)
         c->heatr.heatr_temp = 320;
         c->heatr.heatr_dur = 150;
         snprintf(s->info, sizeof(s->info), "raw, no IAQ: %s", why);
-        ESP_LOGW(TAG, "%s without IAQ: %s", s->model, why);
+        ESP_LOGW(TAG, "event=no_iaq model=%s reason=\"%s\"", s->model, why);
     }
     s->supported = true;
     return ESP_OK;
@@ -185,6 +185,8 @@ const sensor_driver_t sensor_drv_bme68x = {
     .addrs = k_addrs,
     .n_addrs = sizeof(k_addrs),
     .probe = probe,
+    .cadence_us = 3LL * 1000 * 1000,
+    .cadence_why = "BSEC (LP mode) needs a reading every 3 s, +-6.25 %",
     .poll = poll,
     .save_state = save_state,
     .detail = detail,

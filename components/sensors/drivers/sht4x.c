@@ -10,7 +10,6 @@
 
 #define CMD_MEASURE_HIGH  0xFD   // high repeatability, 10 ms
 #define CMD_SERIAL        0x89
-#define PERIOD_US         (2LL * 1000 * 1000)
 
 static const uint8_t k_addrs[] = {0x44, 0x45, 0x46};
 
@@ -49,8 +48,9 @@ static esp_err_t probe(sensor_inst_t *s)
 static int64_t poll(sensor_inst_t *s, int64_t now_us)
 {
     uint8_t b[6];
-    if (cmd_read(s, CMD_MEASURE_HIGH, 10, b) != ESP_OK) {
-        return -1;
+    esp_err_t err = cmd_read(s, CMD_MEASURE_HIGH, 10, b);   // ESP_ERR_INVALID_CRC on a CRC mismatch
+    if (err != ESP_OK) {
+        return sensor_fail(s, err);
     }
     uint16_t t = (b[0] << 8) | b[1];
     uint16_t h = (b[3] << 8) | b[4];
@@ -63,7 +63,7 @@ static int64_t poll(sensor_inst_t *s, int64_t now_us)
     }
     sensor_publish(s, "temperature_c", temp);
     sensor_publish(s, "humidity_pct", rh);
-    return now_us + PERIOD_US;
+    return SENSOR_DONE;
 }
 
 const sensor_driver_t sensor_drv_sht4x = {

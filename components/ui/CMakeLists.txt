@@ -7,5 +7,5 @@ idf_component_register(SRCS "ui.c"
                        INCLUDE_DIRS "include"
                        PRIV_INCLUDE_DIRS "fonts"
                        REQUIRES lvgl__lvgl
-                       PRIV_REQUIRES epd core metrics netmgr timesync sensors board console_cmds
+                       PRIV_REQUIRES epd core appcfg metrics netmgr timesync sensors board console_cmds
                                      esp_timer esp_event esp_app_format esp_system console)

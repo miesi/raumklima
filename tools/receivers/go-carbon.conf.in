@@ -1,0 +1,103 @@
+# go-carbon config for the local Graphite test receiver.
+# Template: start.sh replaces @RUNDIR@ (runtime data, .receivers/ in the repo)
+# and @CONFDIR@ (this directory) and writes the result to @RUNDIR@/go-carbon.conf.
+# Only the keys that differ from go-carbon's built-in defaults or that matter
+# for this setup are listed; see go-carbon.conf.example in the go-carbon repo.
+
+[common]
+# empty: do not switch user (only works in -daemon mode anyway, we use nohup)
+user = ""
+# go-carbon's own metrics land under carbon.agents.<host>.* in the same store
+graph-prefix = "carbon.agents.{host}"
+# write own metrics into the local cache/store instead of a remote carbon
+metric-endpoint = "local"
+metric-interval = "1m0s"
+# a test receiver for a handful of sensors needs no more
+max-cpu = 2
+
+[whisper]
+data-dir = "@RUNDIR@/carbon/whisper"
+# classic one-file-per-metric whisper layout, inspectable with whisper tools
+storage-backend = "files"
+schemas-file = "@CONFDIR@/storage-schemas.conf"
+aggregation-file = "@CONFDIR@/storage-aggregation.conf"
+workers = 2
+# 0 = no rate limit on whisper updates
+max-updates-per-second = 0
+enabled = true
+
+[cache]
+# max-size left at the go-carbon default (1000000 points), far above what a
+# few sensors produce between two writeouts
+# write the metric with the most cached points first (go-carbon default)
+write-strategy = "max"
+
+[udp]
+# empty host part = all addresses; Go binds a dual-stack socket (IPv4 + IPv6)
+listen = ":2003"
+enabled = true
+# 0 = OS default socket receive buffer
+buffer-size = 0
+
+[tcp]
+# plaintext protocol ("<path> <value> <timestamp>\n"), all addresses, v4 + v6
+listen = ":2003"
+enabled = true
+buffer-size = 0
+
+[pickle]
+# not used by the device; disabled so it does not open port 2004
+listen = "127.0.0.1:2004"
+enabled = false
+
+[carbonlink]
+# only needed by graphite-web; off
+listen = "127.0.0.1:7002"
+enabled = false
+
+[grpc]
+# carbonserver gRPC API; off, the HTTP API is enough here
+listen = "127.0.0.1:7003"
+enabled = false
+
+[tags]
+# tagged series need an external tagdb; off
+enabled = false
+
+[carbonserver]
+# HTTP read API (/metrics/find/, /render/); loopback only, queries come from
+# this Mac. Change to ":8080" to query it from other hosts on the LAN.
+listen = "127.0.0.1:8080"
+enabled = true
+read-timeout = "60s"
+write-timeout = "60s"
+# re-scan the whisper tree every 10 s so new metrics show up in /metrics/find/
+# quickly (the go-carbon default of 5m is meant for large stores)
+scan-frequency = "10s"
+# also index metrics that are still only in the cache (no .wsp file yet)
+cache-scan = true
+# render/find/glob caches keep results for up to 5 minutes and would hide
+# new metrics (e.g. "*" not listing a new top-level node); not needed here
+query-cache-enabled = false
+find-cache-enabled = false
+glob-cache-enabled = false
+# answer an empty list instead of 404 when a query matches nothing
+empty-result-ok = true
+
+[dump]
+# no cache dump on shutdown; losing cached test points on stop is acceptable
+enabled = false
+
+[pprof]
+enabled = false
+
+[[logging]]
+logger = ""
+file = "@RUNDIR@/carbon/go-carbon.log"
+# "info" logs every internal stat and index scan (several hundred lines per
+# minute); warn still shows failed requests and receiver errors
+level = "warn"
+# "mixed" = human-readable line with JSON fields
+encoding = "mixed"
+encoding-time = "iso8601"
+encoding-duration = "seconds"

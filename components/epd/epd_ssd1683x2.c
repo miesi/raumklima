@@ -85,7 +85,7 @@ static bool wait_busy(uint32_t *elapsed_ms)
     while (gpio_get_level(BOARD_EPD_BUSY_GPIO) == 1) {
         if (esp_timer_get_time() - t0 > BUSY_TIMEOUT_MS * 1000LL) {
             s_stats.busy_timeouts++;
-            ESP_LOGE(TAG, "BUSY timeout");
+            ESP_LOGE(TAG, "event=busy_timeout");
             return false;
         }
         vTaskDelay(pdMS_TO_TICKS(5));
@@ -192,7 +192,7 @@ esp_err_t epd_init(void)
     }
     const uint8_t internal_sensor = 0x80;
     cmd_data(CMD_TEMP_SENSOR, &internal_sensor, 1);
-    ESP_LOGI(TAG, "SSD1683 x2 ready, SPI %d MHz", SPI_HZ / 1000000);
+    ESP_LOGI(TAG, "event=ready controller=SSD1683x2 spi_mhz=%d", SPI_HZ / 1000000);
     return ESP_OK;
 }
 
@@ -232,7 +232,7 @@ esp_err_t epd_show(const uint8_t *fb, int stride, bool full)
         s_stats.partial_count++;
     }
     s_stats.last_refresh_ms = busy_ms;
-    ESP_LOGI(TAG, "%s refresh: SPI %lu ms, panel %lu ms", full ? "full" : "partial",
+    ESP_LOGI(TAG, "event=refresh mode=%s spi_ms=%lu panel_ms=%lu", full ? "full" : "partial",
              (unsigned long)s_stats.last_spi_ms, (unsigned long)busy_ms);
     return ESP_OK;
 }

@@ -50,7 +50,7 @@ static void state_load(bme_bsec_t *b)
         uint8_t *work = malloc(BSEC_MAX_WORKBUFFER_SIZE);
         if (work) {
             bsec_library_return_t r = CALL(bsec_set_state, b->bsec, state, len, work, BSEC_MAX_WORKBUFFER_SIZE);
-            ESP_LOGI(TAG, "%s: state restored (%u bytes): %d", b->nvs_key, (unsigned)len, r);
+            ESP_LOGI(TAG, "event=state_restored key=%s bytes=%u result=%d", b->nvs_key, (unsigned)len, r);
             free(work);
         }
     }
@@ -71,7 +71,7 @@ void bme_bsec_save(bme_bsec_t *b)
     bsec_library_return_t r = CALL(bsec_get_state, b->bsec, 0, state, sizeof(state), work, BSEC_MAX_WORKBUFFER_SIZE, &len);
     free(work);
     if (r != BSEC_OK) {
-        ESP_LOGW(TAG, "bsec_get_state: %d", r);
+        ESP_LOGW(TAG, "event=state_save_failed call=bsec_get_state result=%d", r);
         return;
     }
     nvs_handle_t h;
@@ -79,7 +79,7 @@ void bme_bsec_save(bme_bsec_t *b)
         nvs_set_blob(h, b->nvs_key, state, len);
         nvs_commit(h);
         nvs_close(h);
-        ESP_LOGI(TAG, "%s: state saved (%u bytes)", b->nvs_key, (unsigned)len);
+        ESP_LOGI(TAG, "event=state_saved key=%s bytes=%u", b->nvs_key, (unsigned)len);
     }
     b->last_save_us = esp_timer_get_time();
 }
@@ -130,7 +130,7 @@ bool bme_bsec_init(bme_bsec_t *b, bsec_chip_t chip, bme_measure_fn measure, void
     bsec_library_return_t r = CALL(bsec_set_configuration, g, cfg, cfg_len, work, BSEC_MAX_WORKBUFFER_SIZE);
     free(work);
     if (r != BSEC_OK) {
-        ESP_LOGE(TAG, "bsec_set_configuration: %d", r);
+        ESP_LOGE(TAG, "event=init_failed call=bsec_set_configuration result=%d", r);
         *why = "bsec_set_configuration failed";
         return false;
     }
@@ -168,19 +168,19 @@ bool bme_bsec_init(bme_bsec_t *b, bsec_chip_t chip, bme_measure_fn measure, void
     uint8_t n_required = BSEC_MAX_PHYSICAL_SENSOR;
     r = CALL(bsec_update_subscription, g, req, sizeof(outs), required, &n_required);
     if (r < 0) {
-        ESP_LOGE(TAG, "bsec_update_subscription: %d", r);
+        ESP_LOGE(TAG, "event=init_failed call=bsec_update_subscription result=%d", r);
         *why = "bsec_update_subscription failed";
         b->bsec = NULL;
         return false;
     }
     if (r > 0) {
-        ESP_LOGW(TAG, "bsec_update_subscription warning %d", r);
+        ESP_LOGW(TAG, "event=warning call=bsec_update_subscription result=%d", r);
     }
 #if HUB_BSEC_VERSION == 2
     s_bsec2_used = true;
 #endif
     b->last_save_us = esp_timer_get_time();
-    ESP_LOGI(TAG, "%s ready for %s, IAQ LP mode (3 s)", b->version, chip == BSEC_CHIP_BME690 ? "BME690" : "BME680");
+    ESP_LOGI(TAG, "event=ready version=\"%s\" chip=%s mode=LP period_s=3", b->version, chip == BSEC_CHIP_BME690 ? "BME690" : "BME680");
     return true;
 }
 
@@ -190,7 +190,7 @@ int64_t bme_bsec_poll(sensor_inst_t *s, bme_bsec_t *b, int64_t now_us)
     bsec_bme_settings_t st;
     bsec_library_return_t r = CALL(bsec_sensor_control, b->bsec, ts_ns, &st);
     if (r < 0) {
-        ESP_LOGW(TAG, "bsec_sensor_control: %d", r);
+        ESP_LOGW(TAG, "event=bsec_failed call=bsec_sensor_control result=%d", r);
         return -1;
     }
     if (st.trigger_measurement && st.op_mode == 1 /* forced */) {
@@ -225,7 +225,7 @@ int64_t bme_bsec_poll(sensor_inst_t *s, bme_bsec_t *b, int64_t now_us)
             uint8_t no = BSEC_NUMBER_OUTPUTS;
             r = CALL(bsec_do_steps, b->bsec, in, ni, out, &no);
             if (r < 0) {
-                ESP_LOGW(TAG, "bsec_do_steps: %d", r);
+                ESP_LOGW(TAG, "event=bsec_failed call=bsec_do_steps result=%d", r);
                 return -1;
             }
             for (int i = 0; i < no; i++) {
@@ -233,7 +233,7 @@ int64_t bme_bsec_poll(sensor_inst_t *s, bme_bsec_t *b, int64_t now_us)
                 switch (out[i].sensor_id) {
                 case BSEC_OUTPUT_IAQ:
                     sensor_publish(s, "iaq", v);
-                    sensor_publish(s, "iaq_accuracy", out[i].accuracy);
+                    sensor_publish_state(s, "iaq_accuracy", out[i].accuracy);
                     b->iaq_accuracy = out[i].accuracy;
                     break;
                 case BSEC_OUTPUT_STATIC_IAQ: sensor_publish(s, "static_iaq", v); break;
@@ -248,8 +248,8 @@ int64_t bme_bsec_poll(sensor_inst_t *s, bme_bsec_t *b, int64_t now_us)
                 case BSEC_OUTPUT_RAW_PRESSURE: sensor_publish(s, "pressure_hpa", v / 100.0f); break;
                 case BSEC_OUTPUT_RAW_HUMIDITY: sensor_publish(s, "raw_humidity_pct", v); break;
                 case BSEC_OUTPUT_RAW_GAS: sensor_publish(s, "gas_ohm", v); break;
-                case BSEC_OUTPUT_STABILIZATION_STATUS: sensor_publish(s, "stab_status", v); break;
-                case BSEC_OUTPUT_RUN_IN_STATUS: sensor_publish(s, "runin_status", v); break;
+                case BSEC_OUTPUT_STABILIZATION_STATUS: sensor_publish_state(s, "stab_status", v); break;
+                case BSEC_OUTPUT_RUN_IN_STATUS: sensor_publish_state(s, "runin_status", v); break;
                 case BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE: sensor_publish(s, "temperature_c", v); break;
                 case BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY: sensor_publish(s, "humidity_pct", v); break;
                 default: break;

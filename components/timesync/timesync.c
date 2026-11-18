@@ -11,6 +11,7 @@
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "netmgr.h"
 #include "freertos/FreeRTOS.h"
@@ -25,16 +26,34 @@ static bool s_from_config;
 static bool s_synced;
 static time_t s_last_sync;
 static uint32_t s_sync_count;
+static int64_t s_sync_wall_us, s_sync_mono_us;   // at the last sync
+static int64_t s_offset_us;
+static bool s_offset_valid;
 // lwIP keeps only the pointer to a server name (sntp_setservername() does not copy) and
 // resolves the name again on every request, so the names must outlive timesync_apply().
 static char s_servers[APPCFG_NTP_MAX][sizeof(((appcfg_t *)0)->ntp[0])];
 
 static void on_sync(struct timeval *tv)
 {
+    // Offset: the new time against what our clock would show - the time of the previous sync
+    // plus the elapsed esp_timer time. That is the drift of our clock since that sync.
+    int64_t mono = esp_timer_get_time();
+    int64_t wall = (int64_t)tv->tv_sec * 1000000 + tv->tv_usec;
+    if (s_sync_mono_us) {
+        s_offset_us = wall - (s_sync_wall_us + (mono - s_sync_mono_us));
+        s_offset_valid = true;
+    }
+    s_sync_wall_us = wall;
+    s_sync_mono_us = mono;
     s_synced = true;
     s_last_sync = tv->tv_sec;
     s_sync_count++;
-    ESP_LOGI(TAG, "time synced: %lld", (long long)tv->tv_sec);
+    if (s_offset_valid) {
+        ESP_LOGI(TAG, "event=synced utc=%lld offset_ms=%.1f syncs=%lu", (long long)tv->tv_sec, s_offset_us / 1000.0,
+                 (unsigned long)s_sync_count);
+    } else {
+        ESP_LOGI(TAG, "event=synced utc=%lld syncs=%lu", (long long)tv->tv_sec, (unsigned long)s_sync_count);
+    }
     esp_event_post(APP_EVENT, APP_EVENT_TIME_SYNCED, NULL, 0, 0);
 }
 
@@ -90,7 +109,7 @@ esp_err_t timesync_apply(void)
     if (err == ESP_OK) {
         s_inited = true;
     } else {
-        ESP_LOGE(TAG, "sntp init: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "event=init_failed err=%s", esp_err_to_name(err));
     }
     xSemaphoreGive(s_lock);
     return err;
@@ -131,6 +150,8 @@ void timesync_get_status(timesync_status_t *out)
     out->synced = s_synced;
     out->last_sync = s_last_sync;
     out->sync_count = s_sync_count;
+    out->offset_valid = s_offset_valid;
+    out->offset_us = s_offset_us;
     bool named_slot0 = false;
     bool any_server = false;
     xSemaphoreTake(s_lock, portMAX_DELAY);   // not while timesync_apply() swaps the servers

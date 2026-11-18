@@ -293,10 +293,46 @@ Each milestone ends with a test on the device that a third person can repeat.
 6. **M5 - robustness.** Task watchdog, reset reason and uptime on screen and console, WLAN
    off/on at the router recovers without reboot.
 
+### Intervals, Carbon and syslog (2026-11-18)
+
+Decisions (Thomas):
+- Sensors with a mandatory cadence keep it: BSEC 3 s (VERIFIED: config `*_33v_3s_4d`, Integration
+  Guide: +-6.25 %), SCD41 periodic 5 s (ASC, FRC and T offset depend on the mode). Explained in
+  `set interval`.
+- No own sensor interval: sensors without a cadence are read once per min(display, Carbon), in
+  one cycle that ends 100 ms before the boundary. Lead = longest of the last 8 measured cycles
+  (the first cycle after boot, with the 1-Wire search, does not count) + 100 ms.
+- Display and Carbon interval 10..3600 s, default 60/60, aligned to UTC multiples. An interval
+  shorter than the read cycle is refused; one not a multiple of the other gets a friendly note.
+- Display shows the mean of the interval; Carbon gets mean plus min/max where an interval held
+  more than one reading. That is always the case for the cadence sensors, for the others only
+  if display < Carbon.
+- Syslog lines: subsystem (ESP_LOG tag) as MSGID and at the start of the message, then
+  key=value, like the queue ID in Postfix logs.
+- First step plain text (Carbon TCP, syslog UDP/TCP).
+
+Test receivers: go-carbon (VERIFIED: commit 54407c0a, built from ../go-carbon) and Homebrew
+rsyslog 8.2610.0, both as user processes, `tools/receivers/`.
+
+TLS / client certificates (for a later step):
+- Syslog: possible. RFC 5425; rsyslog's gtls driver (in the Homebrew build; ossl is not)
+  supports `StreamDriver.AuthMode="x509/name"` with `PermittedPeer` - VERIFIED in a live test:
+  no client certificate and a wrong name were refused, the right one accepted. With TLS 1.3 the
+  refusal comes after the handshake, so the client cannot use "handshake ok" as success.
+- Carbon: go-carbon's plaintext TCP receiver has no TLS at all (VERIFIED: `receiver/tcp/tcp.go`,
+  `net.ListenTCP`). Needs a TLS terminator with client certificate check in front (stunnel,
+  HAProxy - ASSUMPTION, not tested) or the WireGuard tunnel from the spec.
+- ESP side: esp-tls takes a client certificate and key (VERIFIED: `clientcert_buf`,
+  `clientkey_buf` in `esp_tls.h`). The key would sit readable in flash/NVS: protecting it
+  (flash/NVS encryption or the DS peripheral) needs eFuses, which this project never burns.
+  Anyone with the device and a USB cable can read the key - the certificate identifies the
+  device, it does not prove that nobody copied it.
+
+Open: the buffers are RAM (PSRAM) - a reboot loses unsent batches (spec v2: littlefs).
+
 ### Later, in this structure
 
-- Carbon sender reads `metrics`, own task, buffer in `storage` (spec v1/v2).
-- Syslog RFC 5424 (UDP/TCP/TLS) after first NTP sync, buffer before.
+- Carbon/syslog over TLS; buffer in `storage` (littlefs) across reboots (spec v2).
 - SCD41 (Sensirion driver, BSD-3), FRC, temperature offset vs. SHT4x.
 - SHT40/SHT45 one driver `sht4x`, model from serial/ID read.
 - DS2484 + DS18B20: driver emits one metric per ROM ID, `onewire scan/name`.

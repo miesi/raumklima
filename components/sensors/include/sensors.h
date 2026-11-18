@@ -22,6 +22,10 @@ typedef struct {
     uint32_t err_count;
     int64_t last_ok_us;
     char info[48];        // driver-specific state, e.g. "BSEC 2.6.1.0, IAQ acc 3"
+    int64_t cadence_us;   // own measuring cadence, 0 = read once per sensor interval
+    uint32_t read_ms;     // without cadence: duration of the last read cycle
+    uint32_t read_ms_max;
+    int last_err;         // esp_err_t of the last failed poll, 0 = none
 } sensor_info_t;
 
 // Most I2C sensor instances the firmware handles. More found: error message, the first
@@ -38,6 +42,17 @@ int sensors_list(sensor_info_t *out, int max);
 // bus scan does not land between the steps.
 void sensors_bus_lock(void);
 void sensors_bus_unlock(void);
+
+// Sensor interval: sensors without a cadence of their own are read once per interval, the
+// shorter of the display and the Carbon interval.
+int sensors_interval_s(void);
+// Longest recent read cycle of all sensors without a cadence (ms), 0 = none run yet. The
+// display and Carbon intervals must not be shorter than this plus the 100 ms lead.
+uint32_t sensors_read_ms(void);
+// Plan the next read cycle again (intervals changed, clock set).
+void sensors_reschedule(void);
+// Help text: every supported sensor type with its cadence and why, or "once per interval".
+void sensors_cadence_help(char *buf, size_t len);
 
 // Driver detail text for sensor idx (as listed); false if the driver has none.
 bool sensors_detail(int idx, char *buf, size_t len);

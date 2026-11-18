@@ -45,7 +45,15 @@ GitHub - everything committed must be fit for that (no secrets, no unlicensed th
 - Drivers find other sensors' values by quantity (`metrics_get_primary()`), never by a fixed
   instance name such as "sht4x".
 - Metric keys: `<instance>.<quantity>_<unit>`, units in the name (`_c`, `_pct`, `_hpa`, `_ppm`,
-  `_lx`, `_ohm`).
+  `_lx`, `_ohm`). Gauges with `sensor_publish()`, states (accuracy, status, setting, counter)
+  with `sensor_publish_state()` - states are never averaged.
+- Timing: a driver that needs a measuring cadence declares `cadence_us` and `cadence_why`; all
+  others leave it 0, return `SENSOR_DONE` at the end of a read cycle and are read once per
+  sensor interval by the registry. Errors: `return sensor_fail(s, err)`. Interval boundaries
+  only via `sched.h`.
+- Log lines: `ESP_LOGx(tag, "event=<what> key=value ...")`. The tag is the subsystem (component
+  or sensor instance name) and becomes the syslog MSGID; values with spaces in double quotes.
+  No free text - netlog would send it as msg="...".
 - Every device-specific value (WLAN, hostname, NTP, TZ, names) lives in NVS via `appcfg` and is
   settable on the console. Compile-time values are defaults only.
 - Limits (`CONFIG_HUB_SENSORS_MAX`, `CONFIG_HUB_METRICS_MAX`, `OW_MAX_DEVICES`) are enforced

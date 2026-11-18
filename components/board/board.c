@@ -46,9 +46,8 @@ static void probe_pullups(void)
         esp_rom_delay_us(200);
         s_sda_idle[b] = gpio_get_level(pins[0]);
         s_scl_idle[b] = gpio_get_level(pins[1]);
-        ESP_LOGI(TAG, "I2C bus %d idle levels without internal pull-ups: SDA(GPIO%d)=%d SCL(GPIO%d)=%d%s", b + 1,
-                 pins[0], s_sda_idle[b], pins[1], s_scl_idle[b],
-                 (s_sda_idle[b] && s_scl_idle[b]) ? " - external pull-ups present" : " - no pull-ups (nothing connected?)");
+        ESP_LOGI(TAG, "event=i2c_idle_levels bus=%d sda_gpio=%d sda=%d scl_gpio=%d scl=%d pullups=%s", b + 1, pins[0],
+                 s_sda_idle[b], pins[1], s_scl_idle[b], (s_sda_idle[b] && s_scl_idle[b]) ? "present" : "missing");
     }
 }
 

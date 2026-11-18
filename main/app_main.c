@@ -2,13 +2,16 @@
 #include "app_events.h"
 #include "appcfg.h"
 #include "board.h"
+#include "carbon.h"
 #include "console_cmds.h"
 #include "epd.h"
 #include "esp_app_desc.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "i2cbus.h"
 #include "metrics.h"
+#include "netlog.h"
 #include "netmgr.h"
 #include "onewire.h"
 #include "sensors.h"
@@ -19,11 +22,13 @@ static const char *TAG = "main";
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "%s %s", esp_app_get_description()->project_name, esp_app_get_description()->version);
-
+    netlog_init();                      // log hook first: boot lines reach syslog later
+    ESP_LOGI(TAG, "event=boot app=%s version=%s reset_reason=%d", esp_app_get_description()->project_name,
+             esp_app_get_description()->version, esp_reset_reason());
     board_init();                       // rails, LED, pull-up check (before I2C takes the pins)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(appcfg_init());     // NVS
+    netlog_apply();                     // log levels from the settings
     metrics_init();
     ow_names_init();                    // 1-Wire probe names from NVS
 
@@ -32,11 +37,13 @@ void app_main(void)
 
     ESP_ERROR_CHECK(netmgr_start());
     timesync_start();
+    netlog_start();                     // syslog sender
+    carbon_start();                     // Carbon sender and self monitoring
 
     if (epd_init() == ESP_OK) {
         ui_start();
     } else {
-        ESP_LOGE(TAG, "e-paper init failed, running without display");
+        ESP_LOGE(TAG, "event=epd_init_failed display=none");
     }
 
     board_keys_start();
