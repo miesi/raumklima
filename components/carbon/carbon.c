@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "appcfg.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -13,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "health.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "metrics.h"
@@ -34,9 +36,14 @@ typedef struct {
     uint32_t len;      // bytes of "path value\n" lines that follow
 } batch_hdr_t;
 
-static char *s_buf;                         // batch_hdr_t + lines, oldest first
+// Static in PSRAM, not from the heap: a core dump with CONFIG_ESP_COREDUMP_CAPTURE_DRAM copies
+// every used heap block incl. PSRAM, and 2 MB do not fit the coredump partition. External
+// .bss is not part of the dump.
+EXT_RAM_BSS_ATTR static char s_buf_mem[BUF_BYTES];
+EXT_RAM_BSS_ATTR static char s_build_mem[BATCH_MAX];
+static char *const s_buf = s_buf_mem;       // batch_hdr_t + lines, oldest first
 static size_t s_len;
-static char *s_build;                       // one batch while it is built
+static char *const s_build = s_build_mem;   // one batch while it is built
 static SemaphoreHandle_t s_lock;            // s_buf, s_len and the status
 static TaskHandle_t s_task;
 static carbon_status_t s_st;
@@ -382,7 +389,9 @@ static void check_late(const char *what, int64_t boundary, int64_t now)
 static void carbon_task(void *arg)
 {
     char watched[sizeof(((appcfg_t *)0)->carbon_host)] = "";
+    health_id_t hid = health_register("carbon");
     for (;;) {
+        health_alive(hid, (int64_t)sensors_interval_s() * 1000000);   // the wait below is at most that
         appcfg_t c;
         appcfg_get(&c);
         if (strcmp(watched, c.carbon_host) != 0) {
@@ -427,12 +436,6 @@ static void carbon_task(void *arg)
 esp_err_t carbon_start(void)
 {
     s_lock = xSemaphoreCreateMutex();
-    s_buf = heap_caps_malloc(BUF_BYTES, MALLOC_CAP_SPIRAM);
-    s_build = heap_caps_malloc(BATCH_MAX, MALLOC_CAP_SPIRAM);
-    if (!s_buf || !s_build) {
-        ESP_LOGE(TAG, "event=init_failed reason=no_psram_buffer");
-        return ESP_ERR_NO_MEM;
-    }
     // first windows start now: the first Carbon batch covers boot up to the first boundary
     s_last_tick_us = s_last_carbon_us = esp_timer_get_time();
     return xTaskCreate(carbon_task, "carbon", 6144, NULL, 3, &s_task) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;

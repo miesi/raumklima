@@ -169,6 +169,34 @@ Local test receivers on a Mac: `tools/receivers/start.sh` (go-carbon on 2003, HT
 127.0.0.1:8080; rsyslogd on 1516 UDP/TCP), data in `.receivers/` (git-ignored),
 `tools/receivers/stop.sh`. go-carbon is built from a checkout in `../go-carbon`.
 
+Buffers are RAM only (PSRAM, lost on reboot - no flash wear): Carbon 2 MB, about 9 hours at
+the defaults; syslog 512 lines. Syslog over UDP cannot buffer: a send to a host that is down
+does not fail, the line is gone. Use TCP if lines must survive a receiver outage.
+
+## Crashes and hangs
+
+- Watchdogs: interrupt watchdog (800 ms), task watchdog (10 s, idle tasks), both with panic and
+  core dump. A supervisor task (`components/health`) watches the long-running tasks (sensors,
+  display, Carbon, syslog, DNS check): a task that does not come back within 2 x its interval
+  + 30 s counts as hung, the supervisor aborts with a core dump of all task stacks.
+- Core dump: ELF in the `coredump` partition, including `.data`, `.bss` and the heap. After the
+  reboot a syslog warning `event=coredump_found` carries a summary; the dump stays in flash
+  until `coredump erase` (the first dump of a series is kept, later ones do not overwrite it).
+- Fetch and analyse over USB:
+  ```
+  python -m esptool -p /dev/cu.usbserial-10 -b 230400 read-flash 0x620000 <size> core.bin
+  esp-coredump info_corefile -c core.bin -t raw build/raumklima-hub.elf
+  ```
+  `<size>` is `size=` from the syslog line or `coredump`. `idf.py coredump-info` works too, but
+  reads at 460800 baud, which failed on the CH340 here.
+- Safe mode: 3 crashes within 10 minutes of run time: the next boot starts without sensors and
+  display (network, console, syslog, Carbon only); `reboot` leaves it. The crash history lives
+  in RTC memory and is lost on power-off.
+- Known gap: after an interrupt watchdog panic no core dump is written (IDF v6.1.1, see
+  `sdkconfig.defaults`); reset reason and crash history are still there.
+- Tests: `crash panic|fault|spin|irqoff|stall` on the console (crashes or hangs the hub on
+  purpose). `show status` shows crashes, safe mode and the watched tasks.
+
 ## Display and keys
 
 Rotary switch up/down: pages (overview, network, time, one per sensor, system).

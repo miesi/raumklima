@@ -6,7 +6,8 @@ phy_init,  data, phy,      0x11000,  0x1000,
 # apps must start on a 64 KB boundary
 ota_0,     app,  ota_0,    0x20000,  0x300000,
 ota_1,     app,  ota_1,    0x320000, 0x300000,
-# crash dump, sent on next boot (later)
-coredump,  data, coredump, 0x620000, 0x10000,
-# littlefs, Carbon buffering in v2
-storage,   data, littlefs, 0x630000, 0x1d0000,
+# crash dump incl. DRAM and the used PSRAM heap (CONFIG_ESP_COREDUMP_CAPTURE_DRAM); measured
+# ~0.4 MB, 1 MB leaves room for a growing heap
+coredump,  data, coredump, 0x620000, 0x100000,
+# littlefs, unused (Carbon and syslog buffer in RAM only - flash wear)
+storage,   data, littlefs, 0x720000, 0xe0000,

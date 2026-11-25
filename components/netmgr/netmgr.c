@@ -10,6 +10,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "health.h"
 #include "lwip/ip6_addr.h"
 #include "lwip/ip_addr.h"
 #include "lwip/netdb.h"
@@ -251,7 +252,9 @@ static TaskHandle_t s_dns_task;
 
 static void dns_task(void *arg)
 {
+    health_id_t hid = health_register("dnswatch");
     for (;;) {
+        health_alive(hid, DNS_EVERY_MS * 1000LL);
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(DNS_EVERY_MS));
         netmgr_status_t st;
         netmgr_get_status(&st);

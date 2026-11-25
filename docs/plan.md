@@ -249,8 +249,8 @@ has two controllers).
 | phy_init | data/phy | 4 KB | |
 | ota_0 | app | 3 MB | |
 | ota_1 | app | 3 MB | |
-| coredump | data/coredump | 64 KB | crash dump, sent on next boot (spec) |
-| storage | data/littlefs | rest (~1.9 MB) | Carbon buffering in v2 |
+| coredump | data/coredump | 1 MB | crash dump incl. DRAM and used PSRAM heap (~0.4 MB measured) |
+| storage | data/littlefs | 896 KB | unused - buffers stay in RAM (flash wear) |
 
 Until OTA exists, `ota_0` is flashed over USB like a factory partition.
 
@@ -328,11 +328,67 @@ TLS / client certificates (for a later step):
   Anyone with the device and a USB cable can read the key - the certificate identifies the
   device, it does not prove that nobody copied it.
 
-Open: the buffers are RAM (PSRAM) - a reboot loses unsent batches (spec v2: littlefs).
+Buffers: RAM only (Thomas, 2026-11-19): may be lost on reboot, flash cells have few write
+cycles. Receivers down, VERIFIED on the device 2026-11-19: Carbon buffered 32 batches
+(116 KB, "Connection reset by peer" once a minute) and sent all 33 in one go when go-carbon
+came back, with the original timestamps. Syslog over UDP reported `sent 100, errors 0` while
+rsyslog was down - the lines were lost; buffering needs TCP (planned together with the client
+certificate).
+
+Open: in that run the `hub.*` self metrics are missing for 21:49 UTC while the sensor values of
+the same batch are there - `publish_self()` did not run before that window was closed. Cause
+not found yet (ASSUMPTION: the sensor tick and the Carbon boundary of the carbon task fell
+apart once).
+
+### Crashes and hangs (2026-11-19)
+
+Decisions (Thomas): a hung task is aborted at once after 2 x interval + 30 s; core dump with
+DRAM; syslog warning with a summary after the reboot; safe mode after 3 crashes in 10 minutes;
+the crash test commands stay in the firmware.
+
+Hardware (VERIFIED, IDF v6.1.1 sources): two timer group watchdogs (interrupt and task
+watchdog), the RTC watchdog (own clock; also guards the panic handler, 10 s,
+`esp_system/port/panic_handler.c`) and the analog super watchdog - fed by setting
+`RTC_CNTL_SWD_FEED` (bit 29 of `RTC_CNTL_SWD_CONF_REG`), but the bootloader turns on its auto
+feed (`bootloader_esp32s3.c`), so it is no app watchdog. The watchdog hardware does not dump
+memory; the panic handler that its first stage starts writes the core dump. A final stage
+hardware reset, brownout and power loss leave no dump, only the reset reason.
+
+Design:
+- `health_register()` / `health_alive(id, interval)` in each task loop; the supervisor (priority
+  10, itself on the task watchdog) checks once a second and calls `esp_system_abort("stall:
+  <task>")`. Not watched: console and keys (they block on input by design).
+- RTC_NOINIT state with a check word: boots, crashes, run time of the last 3 crashed runs, the
+  task of a supervisor abort. Crash = reset reason panic, interrupt/task/other watchdog, CPU
+  lockup. Any other reset clears the history (also esptool's reset when reading the dump).
+- Safe mode: `sensors_start()` creates its locks but probes nothing and starts no task; the
+  display is not started (the e-paper keeps its last picture).
+
+Found on the device (VERIFIED, each by a `crash` test):
+- `CAPTURE_DRAM` copies every used heap block, PSRAM included: 2.6 MB with the Carbon buffer on
+  the heap, "Not enough space". Fix: big buffers static in PSRAM (`EXT_RAM_BSS_ATTR`), not in the
+  dump; dump 0.36 MB, partition 1 MB. The IDF doc says PSRAM data is not dumped - true for
+  `.ext_ram.bss`, not for the heap.
+- Debug log level made the dump code print ~800 lines at 115200 baud; the 10 s RTC watchdog of
+  the panic handler cut the dump (bad CRC). Fix: espcoredump compiled with info level
+  (`CMakeLists.txt`). Dump now written in 0.85 s.
+- Core dump stack: 280 of 1792 bytes left; now 2560.
+- A busy loop in an unpinned task of low priority (console, 2) did not trigger the task
+  watchdog in minutes (ASSUMPTION: the scheduler moves it between the cores, both idle tasks
+  still run). The test `spin` therefore runs pinned to core 1 (watchdog after 10 s); watched
+  tasks are caught by the supervisor either way.
+- Interrupt watchdog panic: no dump - the heap walk of `CAPTURE_DRAM` takes the heap lock, the
+  pending interrupt fires again ("Re-entered core dump!", backtrace in `heap_caps_walk`). 3000 ms
+  instead of 800 ms did not help; left at the default.
+- `esp_core_dump_get_summary()` gives a garbage PC and a corrupted backtrace after an abort or a
+  watchdog; the syslog line leaves them out then. `esp-coredump info_corefile` shows the full
+  stacks (stall test: `sensors_task` - `poll_one` - `xQueueSemaphoreTake` on the bus lock).
+
+Open: fetching the dump over the network (HTTP on the device, or mail) - to be decided.
 
 ### Later, in this structure
 
-- Carbon/syslog over TLS; buffer in `storage` (littlefs) across reboots (spec v2).
+- Carbon/syslog over TLS (syslog then over TCP, so it buffers while the receiver is down).
 - SCD41 (Sensirion driver, BSD-3), FRC, temperature offset vs. SHT4x.
 - SHT40/SHT45 one driver `sht4x`, model from serial/ID read.
 - DS2484 + DS18B20: driver emits one metric per ROM ID, `onewire scan/name`.

@@ -34,6 +34,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "health.h"
 #include "lvgl.h"
 #include "metrics.h"
 #include "netmgr.h"
@@ -678,11 +679,13 @@ static TickType_t ticks_until(int64_t t_us)
 
 static void ui_task(void *arg)
 {
+    health_id_t hid = health_register("ui");
     update_page();
     render_and_show();
     for (;;) {
         ui_msg_t m;
         int64_t boundary = next_boundary_us();
+        health_alive(hid, boundary + REFRESH_AFTER_US - esp_timer_get_time());   // the wait below
         if (xQueueReceive(s_q, &m, ticks_until(boundary + REFRESH_AFTER_US)) != pdTRUE) {
             // interval boundary: the tiles show the means of the interval that just ended
             s_last_boundary_us = boundary;

@@ -64,6 +64,11 @@ GitHub - everything committed must be fit for that (no secrets, no unlicensed th
 - Overview tiles show only sensors that measure the room air (`metrics_get_ambient()`), not
   by-products such as the SCD4x temperature and humidity.
 - Board pins only in `components/board/`. Nothing else hard-codes a GPIO number.
+- Every long-running task that does not block on input registers with `health_register()` and
+  calls `health_alive(id, interval_us)` once per loop pass; interval = its longest regular
+  wait. A pass that takes longer than 2 x interval + 30 s aborts the hub (core dump).
+- Big buffers (> some KB) static in PSRAM with `EXT_RAM_BSS_ATTR`, not `heap_caps_malloc`:
+  the core dump copies every used heap block, PSRAM ones too, and would not fit.
 - Timestamps sent off-device are UTC; TZ is for display only.
 
 ## Third-party code

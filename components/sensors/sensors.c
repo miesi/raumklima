@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "health.h"
 #include "i2cbus.h"
 #include "metrics.h"
 #include "sched.h"
@@ -409,7 +410,9 @@ static void poll_one(sensor_inst_t *s, int64_t now)
 static void sensors_task(void *arg)
 {
     int64_t next_dew = 0;
+    health_id_t hid = health_register("sensors");
     for (;;) {
+        health_alive(hid, 1000000);   // the wait at the end is at most 1 s
         if (esp_timer_get_time() >= next_dew) {
             derive_dewpoint();
             next_dew = esp_timer_get_time() + DEW_EVERY_US;
@@ -491,6 +494,12 @@ esp_err_t sensors_start(void)
 {
     s_lock = xSemaphoreCreateMutex();
     s_bus_lock = xSemaphoreCreateMutex();
+    if (health_safe_mode()) {
+        // after repeated crashes: no bus traffic at all; the console and the APIs still work
+        // (no sensors), so the core dump can be fetched
+        ESP_LOGW(TAG, "event=sensors_off reason=safe_mode");
+        return ESP_OK;
+    }
     probe_all();
     if (s_n == 0) {
         ESP_LOGW(TAG, "event=no_sensors");

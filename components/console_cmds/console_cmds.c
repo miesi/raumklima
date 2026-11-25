@@ -19,6 +19,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "health.h"
 #include "i2cbus.h"
 #include "metrics.h"
 #include "netlog.h"
@@ -71,6 +72,38 @@ static void print_metric(const metric_t *m, void *arg)
     }
 }
 
+static void show_health(void)
+{
+    health_status_t h;
+    health_get_status(&h);
+    printf("health     %s, boots %lu, crashes %lu since power-on\n",
+           h.safe_mode ? "SAFE MODE - sensors and display off, 'reboot' to leave" : "normal",
+           (unsigned long)h.boots, (unsigned long)h.crashes);
+    if (h.history_n) {
+        printf("             run time before the last crashes:");
+        for (int i = 0; i < h.history_n; i++) {
+            printf(" %lu s", (unsigned long)h.history_s[i]);
+        }
+        printf(" (safe mode: %d within %d s)\n", HEALTH_SAFE_CRASHES, HEALTH_SAFE_WINDOW_S);
+    }
+    if (h.last_stall[0]) {
+        printf("             last reset: supervisor abort, task '%s' hung\n", h.last_stall);
+    }
+    if (h.coredump) {
+        printf("             CORE DUMP in flash - 'coredump' for the summary\n");
+    }
+    printf("             watched:");
+    for (int i = 0; i < h.n_watch; i++) {
+        if (h.watch[i].started) {
+            printf(" %s %llds/%llds", h.watch[i].name, (long long)(h.watch[i].age_us / 1000000),
+                   (long long)(h.watch[i].allowed_us / 1000000));
+        } else {
+            printf(" %s (not started)", h.watch[i].name);
+        }
+    }
+    printf("  (last sign of life / limit)\n");
+}
+
 static void show_status(void)
 {
     char buf[64];
@@ -81,6 +114,7 @@ static void show_status(void)
     printf("uptime     %s, last reset: %s\n", buf, reset_reason());
     printf("heap       internal %u free, PSRAM %u free\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    show_health();
 
     netmgr_status_t n;
     netmgr_get_status(&n);
@@ -759,6 +793,57 @@ static int cmd_led(int argc, char **argv)
     return 1;
 }
 
+static int cmd_coredump(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[1], "erase") == 0) {
+        return health_coredump_erase() == ESP_OK ? (printf("erased\n"), 0) : 1;
+    }
+    if (argc != 1) {
+        printf("usage: coredump [erase]\n");
+        return 1;
+    }
+    char line[200];
+    esp_err_t err = health_coredump_summary(line, sizeof(line));
+    if (err == ESP_ERR_NOT_FOUND) {
+        printf("no core dump in flash\n");
+        return 0;
+    }
+    if (err != ESP_OK) {
+        printf("core dump unreadable: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("%s\n", line);
+    printf("full analysis over USB: idf.py coredump-info (or coredump-debug for gdb), then 'coredump erase'\n");
+    return 0;
+}
+
+static int cmd_crash(int argc, char **argv)
+{
+    static const char *usage =
+        "crash panic|fault|spin|irqoff|stall - TEST: crash or hang the hub on purpose\n"
+        "  panic   esp_system_abort()                   panic handler, core dump\n"
+        "  fault   store to address 0                   exception, core dump\n"
+        "  spin    endless loop pinned to core 1        task watchdog (IDLE1 starves), core dump\n"
+        "  irqoff  endless loop, interrupts off         interrupt watchdog, core dump\n"
+        "  stall   hold the sensor bus lock forever     sensors task hangs, supervisor aborts, core dump\n";
+    if (argc != 2) {
+        printf("%s", usage);
+        return 1;
+    }
+    if (strcmp(argv[1], "stall") == 0) {
+        sensors_bus_lock();   // never released: the sensors task blocks on its next bus access
+        printf("sensor bus locked; the supervisor aborts once the sensors task is overdue (see 'show status')\n");
+        return 0;
+    }
+    if (strcmp(argv[1], "panic") && strcmp(argv[1], "fault") && strcmp(argv[1], "spin") &&
+        strcmp(argv[1], "irqoff")) {
+        printf("%s", usage);
+        return 1;
+    }
+    health_crash(argv[1]);
+    return 0;
+}
+
 static int cmd_version(int argc, char **argv)
 {
     const esp_app_desc_t *app = esp_app_get_description();
@@ -802,6 +887,8 @@ esp_err_t console_cmds_start(void)
         {.command = "sensor", .help = "sensor [name]: driver details (as on the display page)", .func = cmd_sensor_show},
         {.command = "scd41", .help = "scd41 status|diag|single|log|reinit|sleep-cycle|asc|offset|frc|fresh-air|factory-reset", .func = cmd_scd41},
         {.command = "version", .help = "firmware version", .func = cmd_version},
+        {.command = "coredump", .help = "coredump [erase]: core dump summary / erase after fetching", .func = cmd_coredump},
+        {.command = "crash", .help = "crash panic|fault|spin|irqoff|stall (TEST)", .func = cmd_crash},
         {.command = "log", .help = "log on|off", .func = cmd_log},
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {

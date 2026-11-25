@@ -27,8 +27,26 @@ CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+# Interrupt watchdog: default timeout. Known gap (VERIFIED, IDF v6.1.1): after an interrupt
+# watchdog panic the core dump is lost - CAPTURE_DRAM walks the heap under the heap lock, the
+# pending watchdog interrupt fires again ("Re-entered core dump!"). A longer timeout (3000 ms)
+# did not help. Reset reason and crash history still work.
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+# .data, .bss and the internal heap in the dump (not PSRAM): global state is readable in gdb.
+# Needs >= 128 KB in the coredump partition (Kconfig help); partitions.csv has 1 MB.
+# VERIFIED on the device (IDF v6.1.1): it copies every used heap block, PSRAM ones too (2.6 MB
+# with the Carbon buffer on the heap, "Not enough space to save core dump"). Big buffers are
+# therefore static in PSRAM (EXT_RAM_BSS_ATTR), which the dump leaves out.
+CONFIG_ESP_COREDUMP_CAPTURE_DRAM=y
+# EXT_RAM_BSS_ATTR: static buffers in PSRAM (Carbon 2 MB, syslog ring)
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+# Keep the first dump of a crash series (the cause), and no flash writes on every crash of a
+# crash loop. health.c erases a damaged dump at boot, else it would block all later ones.
+CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y
+# The dump code runs on its own stack: 1792 (default) left 280 bytes free in a test (VERIFIED,
+# "Core dump used 1600 bytes on stack")
+CONFIG_ESP_COREDUMP_STACK_SIZE=2560
 
 # --- lwIP: IPv6 SLAAC, NTP from DHCP option 42 ---
 CONFIG_LWIP_IPV6=y

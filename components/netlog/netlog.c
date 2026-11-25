@@ -9,17 +9,18 @@
 #include <time.h>
 
 #include "appcfg.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "health.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "netmgr.h"
 #include "sched.h"
 
-static const char *TAG = "netlog";
 
 #define APP_NAME "raumklima-hub"
 #define FACILITY 16                    // local0
@@ -37,7 +38,8 @@ typedef struct {
     char msg[MSG_LEN];
 } rec_t;
 
-static rec_t *s_ring;                  // PSRAM
+// Static in PSRAM, not from the heap: kept out of the core dump (see carbon.c).
+EXT_RAM_BSS_ATTR static rec_t s_ring[RING_SLOTS];
 static uint32_t s_head, s_tail;        // free-running counters, slot = counter % RING_SLOTS
 static SemaphoreHandle_t s_mutex;      // s_line, the ring and the status
 static vprintf_like_t s_prev;
@@ -165,7 +167,7 @@ static int hook(const char *fmt, va_list ap)
     }
     bool queued = false;
     TaskHandle_t me = xTaskGetCurrentTaskHandle();
-    if (msg && s_ring && sev <= s_sys_level) {
+    if (msg && sev <= s_sys_level) {
         push(sev, tag, tag_len, msg, msg_len);
         queued = s_enabled;
         s_open = !complete;
@@ -194,12 +196,7 @@ static int hook(const char *fmt, va_list ap)
 esp_err_t netlog_init(void)
 {
     s_mutex = xSemaphoreCreateMutex();
-    s_ring = heap_caps_calloc(RING_SLOTS, sizeof(rec_t), MALLOC_CAP_SPIRAM);
     s_prev = esp_log_set_vprintf(hook);
-    if (!s_ring) {
-        ESP_LOGE(TAG, "event=init_failed reason=no_psram_buffer");
-        return ESP_ERR_NO_MEM;
-    }
     return ESP_OK;
 }
 
@@ -336,7 +333,9 @@ static void sender_task(void *arg)
     char cur[sizeof(((appcfg_t *)0)->syslog_host) + 16] = "";
     int64_t resolved_us = 0, retry_at = 0;
     static char line[512];
+    health_id_t hid = health_register("netlog");
     for (;;) {
+        health_alive(hid, 1000000);
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
         appcfg_t c;
         appcfg_get(&c);
@@ -452,6 +451,7 @@ static void sender_task(void *arg)
             }
             s_st.sent++;
             xSemaphoreGive(s_mutex);
+            health_alive(hid, 1000000);   // a long backlog is progress, not a hang
         }
     }
 }
