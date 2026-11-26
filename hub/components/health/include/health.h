@@ -74,8 +74,13 @@ void health_get_status(health_status_t *out);
 // ESP_ERR_NOT_FOUND if there is none.
 esp_err_t health_coredump_summary(char *buf, size_t len);
 
-// Erases the core dump in flash (after it was fetched).
+// Erases the core dump in flash (after it was fetched) and posts APP_EVENT_COREDUMP_ERASED.
 esp_err_t health_coredump_erase(void);
+
+// While a valid core dump is in flash: true and the download token (HEALTH_TOKEN_LEN hex
+// characters). The token is random for each boot (hardware RNG before the radio starts).
+#define HEALTH_TOKEN_LEN 16
+bool health_coredump_token(char *buf, size_t len);
 
 // Test helpers for the console: "panic", "fault", "irqoff" do not return; "spin" starts a
 // task pinned to core 1 that never yields and returns.

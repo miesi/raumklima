@@ -3,8 +3,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "app_events.h"
+#include "bootloader_random.h"
 #include "esp_attr.h"
 #include "esp_core_dump.h"
+#include "esp_event.h"
+#include "esp_random.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
@@ -46,6 +50,7 @@ static esp_reset_reason_t s_reason;
 static bool s_safe;
 static char s_last_stall[16];
 static esp_err_t s_cd_err = ESP_ERR_NOT_FOUND;
+static char s_token[HEALTH_TOKEN_LEN + 1];
 
 // --- RTC state ---
 
@@ -176,6 +181,7 @@ esp_err_t health_coredump_erase(void)
     if (err == ESP_OK) {
         s_cd_err = ESP_ERR_NOT_FOUND;
         ESP_LOGI(TAG, "event=coredump_erased");
+        esp_event_post(APP_EVENT, APP_EVENT_COREDUMP_ERASED, NULL, 0, 0);
     } else {
         ESP_LOGE(TAG, "event=coredump_erase_failed err=%s", esp_err_to_name(err));
     }
@@ -208,6 +214,29 @@ static void coredump_report(void)
     }
     if (coredump_backtrace(line, sizeof(line)) == ESP_OK) {
         ESP_LOGW(TAG, "event=coredump_backtrace %s", line);
+    }
+    ESP_LOGW(TAG, "event=coredump_http port=80 path=/coredump token=%s", s_token);
+}
+
+bool health_coredump_token(char *buf, size_t len)
+{
+    if (s_cd_err != ESP_OK) {
+        return false;
+    }
+    strlcpy(buf, s_token, len);
+    return true;
+}
+
+// Before the radio starts, esp_random() is not a true random source; the SAR ADC entropy source
+// makes it one (bootloader_random.h). Called in health_init(), before board_init() and WLAN.
+static void make_token(void)
+{
+    uint8_t r[HEALTH_TOKEN_LEN / 2];
+    bootloader_random_enable();
+    esp_fill_random(r, sizeof(r));
+    bootloader_random_disable();
+    for (size_t i = 0; i < sizeof(r); i++) {
+        snprintf(&s_token[2 * i], 3, "%02x", r[i]);
     }
 }
 
@@ -259,9 +288,10 @@ void health_init(void)
                  (unsigned long)s_rtc.boots, (unsigned long)s_rtc.crashes);
     }
     if (s_safe) {
-        ESP_LOGE(TAG, "event=safe_mode crashes=%lu run_s_total=%lu limit_s=%d sensors=off display=off leave=reboot",
+        ESP_LOGE(TAG, "event=safe_mode crashes=%lu run_s_total=%lu limit_s=%d sensors=off display=static leave=reboot",
                  (unsigned long)s_rtc.hist_n, (unsigned long)sum, HEALTH_SAFE_WINDOW_S);
     }
+    make_token();
     coredump_report();
 }
 

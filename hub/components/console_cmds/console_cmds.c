@@ -813,7 +813,24 @@ static int cmd_coredump(int argc, char **argv)
         return 1;
     }
     printf("%s\n", line);
-    printf("full analysis over USB: idf.py coredump-info (or coredump-debug for gdb), then 'coredump erase'\n");
+    char token[HEALTH_TOKEN_LEN + 1];
+    if (health_coredump_token(token, sizeof(token))) {
+        netmgr_status_t n;
+        netmgr_get_status(&n);
+        // addresses, not the host name: the hub has no mDNS, the name may not resolve
+        const char *lead = "download: ";
+        if (n.has_ip4) {
+            printf("%s curl -o core.bin 'http://" IPSTR "/coredump?token=%s'\n", lead, IP2STR(&n.ip4.ip), token);
+            lead = "          ";
+        }
+        for (int i = 0; i < n.n_ip6; i++) {
+            printf("%s curl -g -o core.bin 'http://[" IPV6STR "]/coredump?token=%s'\n", lead, IPV62STR(n.ip6[i]),
+                   token);
+            lead = "          ";
+        }
+    }
+    printf("analysis:  esp-coredump info_corefile -c core.bin -t raw build/raumklima-hub.elf\n");
+    printf("then:      coredump erase (closes port 80)\n");
     return 0;
 }
 

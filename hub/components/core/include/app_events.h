@@ -14,6 +14,7 @@ typedef enum {
     APP_EVENT_TIME_SYNCED,      // SNTP sync done (every sync, not only the first)
     APP_EVENT_SENSORS_CHANGED,  // sensor list changed (probe, rescan)
     APP_EVENT_KEY,              // button press, data: app_key_event_t
+    APP_EVENT_COREDUMP_ERASED,  // the core dump in flash was erased (the HTTP endpoint closes)
 } app_event_id_t;
 
 typedef enum {

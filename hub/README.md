@@ -184,16 +184,28 @@ does not fail, the line is gone. Use TCP if lines must survive a receiver outage
 - Core dump: ELF in the `coredump` partition, including `.data`, `.bss` and the heap. After the
   reboot a syslog warning `event=coredump_found` carries a summary; the dump stays in flash
   until `coredump erase` (the first dump of a series is kept, later ones do not overwrite it).
-- Fetch and analyse over USB:
+- Fetch over the network: while a core dump is in flash, the hub opens HTTP port 80. Without a
+  dump the port is closed. The token is random for each boot. It is in the syslog line
+  `event=coredump_http`, in the output of `coredump` and on the system page.
+  ```
+  curl -o core.bin 'http://<hub address>/coredump?token=<token>'
+  esp-coredump info_corefile -c core.bin -t raw build/raumklima-hub.elf
+  coredump erase                      (on the console: erases the dump, closes port 80)
+  ```
+  A wrong or missing token gets HTTP 403. `coredump` shows the URLs with the IPv4 and IPv6
+  addresses (the hub has no mDNS, its host name can be unknown in the LAN).
+- Fetch over USB:
   ```
   python -m esptool -p /dev/cu.usbserial-10 -b 230400 read-flash 0x620000 <size> core.bin
-  esp-coredump info_corefile -c core.bin -t raw build/raumklima-hub.elf
   ```
   `<size>` is `size=` from the syslog line or `coredump`. `idf.py coredump-info` works too, but
-  reads at 460800 baud, which failed on the CH340 here.
-- Safe mode: 3 crashes within 10 minutes of run time: the next boot starts without sensors and
-  display (network, console, syslog, Carbon only); `reboot` leaves it. The crash history lives
-  in RTC memory and is lost on power-off.
+  reads at 460800 baud, which failed on the CH340 here. esptool resets the chip; that clears
+  the crash history (not the dump).
+- Safe mode: 3 crashes within 10 minutes of run time: the next boot starts without sensors
+  (network, console, syslog, Carbon and the core dump download only). The display shows one
+  static screen: "SAFE MODE", why the values are not updated, how to leave it and the core
+  dump URL. `reboot` leaves safe mode. The crash history lives in RTC memory and is lost on
+  power-off.
 - Known gap: after an interrupt watchdog panic no core dump is written (IDF v6.1.1, see
   `sdkconfig.defaults`); reset reason and crash history are still there.
 - Tests: `crash panic|fault|spin|irqoff|stall` on the console (crashes or hangs the hub on

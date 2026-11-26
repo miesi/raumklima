@@ -4,6 +4,7 @@
 #include "board.h"
 #include "carbon.h"
 #include "console_cmds.h"
+#include "coredumpd.h"
 #include "epd.h"
 #include "esp_app_desc.h"
 #include "esp_event.h"
@@ -42,13 +43,14 @@ void app_main(void)
     timesync_start();
     netlog_start();                     // syslog sender
     carbon_start();                     // Carbon sender and self monitoring
+    coredumpd_start();                  // HTTP port 80, only while a core dump is in flash
 
-    if (health_safe_mode()) {
-        ESP_LOGW(TAG, "event=display_off reason=safe_mode");
-    } else if (epd_init() == ESP_OK) {
-        ui_start();
-    } else {
+    if (epd_init() != ESP_OK) {
         ESP_LOGE(TAG, "event=epd_init_failed display=none");
+    } else if (health_safe_mode()) {
+        ui_start_safe_mode();           // one static screen, no UI task
+    } else {
+        ui_start();
     }
 
     board_keys_start();

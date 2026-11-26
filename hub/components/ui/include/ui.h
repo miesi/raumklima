@@ -10,6 +10,9 @@ extern "C" {
 // Needs epd_init(), the default event loop and the data components running.
 esp_err_t ui_start(void);
 
+// Safe mode: one static screen that tells why the values are not updated; no UI task.
+esp_err_t ui_start_safe_mode(void);
+
 #ifdef __cplusplus
 }
 #endif

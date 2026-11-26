@@ -79,6 +79,7 @@ hub/
     carbon/                   # Graphite plaintext sender, PSRAM buffer
     netlog/                   # syslog client (RFC 5424), PSRAM ring
     health/                   # supervisor, crash history, safe mode, core dump report
+    coredumpd/                # HTTP port 80 with the core dump, only while there is one
     epd/                      # e-paper driver (SSD1683 x 2)
     ui/                       # LVGL pages, fonts
     console_cmds/             # esp_console commands
@@ -393,15 +394,31 @@ Found on the device (VERIFIED, each by a `crash` test):
 
 Open: fetching the dump over the network (HTTP on the device, or mail) - to be decided.
 
-### Next hub tasks (Thomas, 2026-11-26)
+### Core dump over HTTP and safe mode screen (Thomas, 2026-11-26)
 
-- Core dump over HTTP: the hub opens port 80 only while a valid core dump is in flash.
-  `GET /coredump?token=<token>` returns the raw partition data. The token is random for each
-  dump. It is in the syslog line `event=coredump_found`, in the output of the console command
-  `coredump` and on the system page of the display. After `coredump erase` the port closes.
-- Safe mode screen: in safe mode the display shows "SAFE MODE" and tells that the sensor
-  values are not updated. Risk: if the crash comes from the display code, this screen can
-  crash too. Then safe mode is still the same, but without a screen.
+- `coredumpd` starts the HTTP server on port 80 only while a valid core dump is in flash.
+  `GET /coredump?token=<token>` returns the raw partition data. The token: 16 hex characters
+  (64 bits) from the hardware RNG before the radio starts (`bootloader_random_enable()`), new
+  for each boot. It is in the syslog line `event=coredump_http` (a separate line: the summary
+  line is near the 216 byte limit of netlog), in `coredump` and on the system page.
+  `coredump erase` posts `APP_EVENT_COREDUMP_ERASED`, the server stops.
+- Safe mode: the normal UI task does not start. One task waits up to 30 s for IPv4, shows one
+  static screen and ends. If the display code causes the crashes, it gets one chance to crash,
+  not one each minute.
+
+Test 2026-11-26 on the CrowPanel (VERIFIED):
+- No dump: `curl` to port 80: "Couldn't connect to server".
+- After `crash panic`: no token or a wrong token 403, other path 404, the right token 200 with
+  365664 bytes in 0.63 s over IPv4 and over IPv6 (same SHA-1). `esp-coredump info_corefile`
+  shows the stack of the crash test. The token of the previous boot gets 403.
+- `coredump erase`: `event=stopped`, port 80 closed again.
+- 3 crashes in 122 s of run time: safe mode, screen after 8 to 10 s, download works. `screen 3`:
+  "SAFE MODE" and five text lines, the URL ends at x = 654 of 792.
+- Found: `font_dejavu_bold_72` has digits only (`tools/mkfont.py`, `DIGITS_ONLY`); the title
+  uses `font_dejavu_bold_32`.
+
+### Next hub tasks
+
 - KNX (send on the primary hub, listen on all hubs), roles, receiver for nodes: see
   `../../docs/plan.md`.
 

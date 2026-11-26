@@ -535,6 +535,10 @@ static void page_system(char *c0, size_t l0, char *c1, size_t l1)
              "E-paper  %" PRIu32 " full, %" PRIu32 " partial\nLast     SPI %" PRIu32 " ms, panel %" PRIu32
              " ms\nTimeouts %" PRIu32,
              e.full_count, e.partial_count, e.last_spi_ms, e.last_refresh_ms, e.busy_timeouts);
+    char token[HEALTH_TOKEN_LEN + 1];
+    if (health_coredump_token(token, sizeof(token))) {
+        snprintf(c1 + strlen(c1), l1 - strlen(c1), "\nCore dump  HTTP port 80\nToken    %s", token);
+    }
     char w[96];
     sensors_warnings(w, sizeof(w));
     if (w[0]) {
@@ -742,7 +746,7 @@ static int cmd_screen(int argc, char **argv)
     return 0;
 }
 
-esp_err_t ui_start(void)
+static esp_err_t display_init(void)
 {
     lv_init();
     lv_tick_set_cb(tick_ms);
@@ -761,14 +765,78 @@ esp_err_t ui_start(void)
     lv_display_set_flush_cb(s_disp, flush_cb);
     ESP_LOGI(TAG, "event=ready lvgl=%d.%d.%d width=%d height=%d format=I1 stride=%d", LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH,
              EPD_WIDTH, EPD_HEIGHT, s_stride);
+    const esp_console_cmd_t c = {.command = "screen", .help = "screen [scale]: print the panel content", .func = cmd_screen};
+    esp_console_cmd_register(&c);
+    return ESP_OK;
+}
 
+esp_err_t ui_start(void)
+{
+    esp_err_t err = display_init();
+    if (err != ESP_OK) {
+        return err;
+    }
     build_screen();
 
     s_q = xQueueCreate(8, sizeof(ui_msg_t));
     esp_event_handler_register(APP_EVENT, ESP_EVENT_ANY_ID, on_app_event, NULL);
     // LVGL rendering + 1 bpp blending: generous stack
     xTaskCreate(ui_task, "ui", 8192, NULL, 3, NULL);
-    const esp_console_cmd_t c = {.command = "screen", .help = "screen [scale]: print the panel content", .func = cmd_screen};
-    esp_console_cmd_register(&c);
     return ESP_OK;
+}
+
+// --- safe mode: one static screen, no UI task ---
+
+// If the display code caused the crashes, it gets one chance to crash, not one each minute.
+static void safe_task(void *arg)
+{
+    netmgr_status_t n;
+    for (int i = 0; i < 30; i++) {   // wait for an address, so that the screen can show the URL
+        netmgr_get_status(&n);
+        if (n.has_ip4) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    health_status_t h;
+    health_get_status(&h);
+    char text[400];
+    size_t o = snprintf(text, sizeof(text),
+                        "The hub had %d crashes in less than %d minutes.\n"
+                        "Sensors and display are off: the values are not updated.\n"
+                        "Network, console, syslog and Carbon operate.\n"
+                        "To start normally: command 'reboot' on the console.\n",
+                        h.history_n, HEALTH_SAFE_WINDOW_S / 60);
+    char token[HEALTH_TOKEN_LEN + 1];
+    if (health_coredump_token(token, sizeof(token)) && o < sizeof(text)) {
+        if (n.has_ip4) {
+            snprintf(text + o, sizeof(text) - o, "Core dump: http://" IPSTR "/coredump?token=%s", IP2STR(&n.ip4.ip),
+                     token);
+        } else {
+            snprintf(text + o, sizeof(text) - o, "Core dump: http://%s/coredump?token=%s", n.hostname, token);
+        }
+    }
+    lv_obj_t *scr = lv_screen_active();
+    lv_obj_remove_style_all(scr);
+    lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    // font_dejavu_bold_72 has digits only (tools/mkfont.py, DIGITS_ONLY)
+    set_text(mk_label(scr, &font_dejavu_bold_32, 14, 10), "SAFE MODE");
+    lv_obj_t *t = mk_label(scr, &font_dejavu_18, 14, 60);
+    lv_obj_set_width(t, EPD_WIDTH - 28);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_MODE_WRAP);
+    set_text(t, text);
+    s_force_full = true;
+    render_and_show();
+    ESP_LOGW(TAG, "event=safe_mode_screen shown=1");
+    vTaskDelete(NULL);
+}
+
+esp_err_t ui_start_safe_mode(void)
+{
+    esp_err_t err = display_init();
+    if (err != ESP_OK) {
+        return err;
+    }
+    return xTaskCreate(safe_task, "ui_safe", 8192, NULL, 3, NULL) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

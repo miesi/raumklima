@@ -143,7 +143,7 @@ Proposal:
 Each step has a result that Thomas can see.
 
 1. Repository structure (complete 2026-11-26).
-2. Hub: HTTP endpoint for the core dump, safe mode screen.
+2. Hub: HTTP endpoint for the core dump, safe mode screen (complete 2026-11-26).
 3. Hub: KNX send and listen, console commands, test with a receiver.
 4. Hub: roles, mDNS, warnings, data between the hubs.
 5. Protocol v0 and a node on the nRF54L15 DK with an SHT4x only. The hub receives the values
