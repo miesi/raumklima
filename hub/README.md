@@ -1,6 +1,6 @@
-# raumklima-hub
+# raumklima hub
 
-ESP-IDF firmware for a room climate sensor hub: ESP32-S3, I2C sensors, e-paper status
+Part of [raumklima](../README.md). ESP-IDF firmware for a room climate sensor hub: ESP32-S3, I2C sensors, e-paper status
 display, network time, serial console. One firmware for all boards and sensor sets; every
 device-specific value is set on the console and stored in NVS.
 
@@ -26,8 +26,8 @@ BSEC is a closed binary under Bosch's license and not part of this repo.
 
 - Default: BSEC2 is downloaded at build time (pinned, SHA256-checked). IAQ for the BME680 only.
 - BSEC3 (IAQ for BME680 and BME690): download BSEC 3.x from Bosch Sensortec (click-through
-  license) and unpack it to `third_party/bsec3/` (git-ignored), so that
-  `third_party/bsec3/release_bin/IAQ/bin/esp/esp32_s3/libalgobsec.a` exists. Then
+  license) and unpack it to `hub/third_party/bsec3/` (git-ignored), so that
+  `hub/third_party/bsec3/release_bin/IAQ/bin/esp/esp32_s3/libalgobsec.a` exists. Then
   `idf.py reconfigure`. The build log says which BSEC it uses. Tested with BSEC 3.3.0.1.
 - `HUB_FORCE_BSEC2=1 idf.py -B build-bsec2 build` builds the BSEC2 variant anyway.
 
@@ -35,9 +35,10 @@ Building means accepting Bosch's license terms for the BSEC version used.
 
 ## Build
 
-Requires ESP-IDF v6.1.x.
+Requires ESP-IDF v6.1.x. Run all commands in `hub/`.
 
 ```sh
+cd hub
 . /path/to/esp-idf/export.sh
 idf.py set-target esp32s3
 idf.py build
@@ -48,7 +49,7 @@ On macOS the CH340C shows up as `/dev/cu.usbserial-*`. Exit the monitor with `Ct
 
 ## WLAN at build time (optional)
 
-Create `wlan.config` in the repo root (git-ignored) and run `idf.py reconfigure`:
+Create `wlan.config` in `hub/` (git-ignored) and run `idf.py reconfigure`:
 
 ```
 ssid=<ssid>
@@ -165,9 +166,10 @@ save
 `log on|off` only changes the console. Plain text only for now; TLS (with client certificates)
 is possible for syslog, not directly for go-carbon - see `docs/plan.md`.
 
-Local test receivers on a Mac: `tools/receivers/start.sh` (go-carbon on 2003, HTTP API on
-127.0.0.1:8080; rsyslogd on 1516 UDP/TCP), data in `.receivers/` (git-ignored),
-`tools/receivers/stop.sh`. go-carbon is built from a checkout in `../go-carbon`.
+Local test receivers on a Mac: `../tools/receivers/start.sh` (go-carbon on 2003, HTTP API on
+127.0.0.1:8080; rsyslogd on 1516 UDP/TCP), data in `../.receivers/` (git-ignored),
+`../tools/receivers/stop.sh`. go-carbon is built from a checkout next to the repository
+(`../../go-carbon` from `hub/`).
 
 Buffers are RAM only (PSRAM, lost on reboot - no flash wear): Carbon 2 MB, about 9 hours at
 the defaults; syslog 512 lines. Syslog over UDP cannot buffer: a send to a host that is down
@@ -216,5 +218,5 @@ for more than 20 s, a "NETWORK DOWN" overlay appears.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Generated fonts: DejaVu (Bitstream Vera license),
+MIT, see [LICENSE](../LICENSE). Generated fonts: DejaVu (Bitstream Vera license),
 see `components/ui/fonts/LICENSE-DejaVu`.

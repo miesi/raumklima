@@ -1,11 +1,15 @@
-# Firmware skeleton - plan
+# Hub firmware - plan
 
-Status: 2026-11-16 - M0 to M4 implemented and tested on the CrowPanel 5.79 (see "Milestones").
-Open: visual check of the panel (orientation, seam), key test, NTP fallback test (option 42 off).
+Status 2026-11-26: M0 to M4 complete and tested on the CrowPanel 5.79 (see "Milestones"),
+also intervals, Carbon, syslog and the crash handling. The hub is in `hub/` of the repository
+`raumklima` since 2026-11-26. The system plan (nodes, roles, KNX) is in `../../docs/plan.md`.
+Open from M4: visual check of the panel (orientation, seam), key test, NTP fallback test
+(option 42 off).
 
 ## Decisions (2026-11-16)
 
-- Repo `raumklima-hub`, GitHub account `miesi`, MIT license, English only.
+- Repo `raumklima-hub`, GitHub account `miesi`, MIT license, English only. (2026-11-26: the
+  repository is now `raumklima`, the hub is in `hub/`.)
 - Graphics: LVGL 9, 1 bpp rendering, full-frame render (`LV_DISPLAY_RENDER_MODE_FULL`).
 - Pages switched with the rotary switch: overview, network, one page per sensor, system.
 - Display refresh once per minute; time without seconds, uptime in minutes.
@@ -50,33 +54,36 @@ Bluetooth, power-fail handling. The structure below leaves room for each of them
 
 ## How
 
-### Repo layout
+### Layout of hub/
+
+The layout as it is on 2026-11-26 (the first plan of 2026-11-16 had some other names):
 
 ```
-raumklima-hub/
-  CMakeLists.txt
-  sdkconfig.defaults            # common: PSRAM, lwIP (DHCP NTP, IPv6), console, watchdog
-  sdkconfig.defaults.esp32s3
-  partitions.csv                # OTA-ready from day 1 (see below)
-  main/
-    app_main.c                  # init order only, no logic
-    Kconfig.projbuild           # board choice, compile-time defaults
+hub/
+  CMakeLists.txt              # project; espcoredump log level (see "Crashes and hangs")
+  sdkconfig.defaults          # PSRAM, lwIP (DHCP NTP, IPv6), console, watchdogs, core dump
+  partitions.csv              # OTA-ready, 1 MB coredump
+  main/app_main.c             # init order only, no logic
   components/
-    board/                      # pin map + power rails + buttons, one file per board
-    appcfg/                     # typed settings in NVS with defaults, change notifications
-    netmgr/                     # WLAN STA, DHCPv4 hostname, SLAAC, link state, RSSI
-    timesync/                   # SNTP, DHCP option 42, fallback servers, sync state
-    i2cbus/                     # one i2c_master bus, scan, error counters per device
-    sensors/                    # driver interface, registry, polling task
-      drivers/bh1750.c
-      drivers/bme68x_bsec.c     # BME680 + BSEC2, BME688 raw, BME690 detected only
-      (later) drivers/scd4x.c sht4x.c ds2484.c bme69x.c
-    bosch_bme68x/               # fetches Bosch SensorAPI + BSEC2 at configure time
-    metrics/                    # latest value per metric + 24 h ring buffer in PSRAM
-    epd_ssd1683x2/              # e-paper driver, written from the SSD1683 datasheet
-    ui/                         # screen layout, refresh policy
-    console_cmds/               # esp_console commands
+    board/                    # pin map, power rails, keys, LED
+    appcfg/                   # typed settings in NVS with defaults
+    core/                     # app events, sched.h (interval boundaries)
+    netmgr/                   # WLAN STA, DHCPv4 hostname, SLAAC, link state, DNS checks
+    timesync/                 # SNTP, DHCP option 42, fallback server, sync state
+    i2cbus/                   # two i2c_master buses, scan
+    onewire/                  # 1-Wire ROM IDs, names in NVS
+    sensors/                  # driver interface, registry, polling task
+      drivers/                # bh1750 bme68x_bsec bme69x bsec_glue ds2484 scd4x sht4x
+    bosch_bme68x/             # Bosch SensorAPI and BSEC2 (fetched) or BSEC3 (local)
+    metrics/                  # last value and interval windows for each metric
+    carbon/                   # Graphite plaintext sender, PSRAM buffer
+    netlog/                   # syslog client (RFC 5424), PSRAM ring
+    health/                   # supervisor, crash history, safe mode, core dump report
+    epd/                      # e-paper driver (SSD1683 x 2)
+    ui/                       # LVGL pages, fonts
+    console_cmds/             # esp_console commands
   docs/
+  tools/                      # build.sh, mkfont.py
 ```
 
 Rule: components talk through `esp_event` (custom event base) and `metrics`, not through each
@@ -386,13 +393,24 @@ Found on the device (VERIFIED, each by a `crash` test):
 
 Open: fetching the dump over the network (HTTP on the device, or mail) - to be decided.
 
+### Next hub tasks (Thomas, 2026-11-26)
+
+- Core dump over HTTP: the hub opens port 80 only while a valid core dump is in flash.
+  `GET /coredump?token=<token>` returns the raw partition data. The token is random for each
+  dump. It is in the syslog line `event=coredump_found`, in the output of the console command
+  `coredump` and on the system page of the display. After `coredump erase` the port closes.
+- Safe mode screen: in safe mode the display shows "SAFE MODE" and tells that the sensor
+  values are not updated. Risk: if the crash comes from the display code, this screen can
+  crash too. Then safe mode is still the same, but without a screen.
+- KNX (send on the primary hub, listen on all hubs), roles, receiver for nodes: see
+  `../../docs/plan.md`.
+
 ### Later, in this structure
 
-- Carbon/syslog over TLS (syslog then over TCP, so it buffers while the receiver is down).
-- SCD41 (Sensirion driver, BSD-3), FRC, temperature offset vs. SHT4x.
-- SHT40/SHT45 one driver `sht4x`, model from serial/ID read.
-- DS2484 + DS18B20: driver emits one metric per ROM ID, `onewire scan/name`.
-- BME690 + BSEC 3.x for IAQ; BSEC is a closed binary under Bosch license - not committed,
-  fetched at build time (see open questions).
+- Carbon/syslog over TLS with client certificates (syslog then over TCP, so it buffers while
+  the receiver is down).
 - OTA over HTTPS, signed images, rollback.
 - Board files for XIAO ESP32-S3 / QT Py ESP32-S3 (native USB console instead of UART0).
+
+Done since the first plan: SCD41 with FRC and temperature offset, SHT4x, DS2484 with DS18B20,
+BME690 with BSEC3, intervals, Carbon, syslog, crash handling.

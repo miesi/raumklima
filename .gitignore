@@ -13,15 +13,16 @@ wlan.config
 *.pem
 *.key
 *.crt
-!docs/**/*.pem
+!**/docs/**/*.pem
 secrets.*
 sdkconfig.secrets
 # NVS partition images generated from CSV for bulk provisioning
 nvs_*.bin
 nvs_*.csv
 
-# --- Bosch BSEC3: click-through license, each developer downloads it (see README) ---
-third_party/bsec3/
+# --- Bosch BSEC3: click-through license, each developer downloads it (see hub/README.md) ---
+# "**/": a pattern with a slash inside matches only below the .gitignore directory
+**/third_party/bsec3/
 
 # --- debugging artefacts ---
 *.elf.dump
