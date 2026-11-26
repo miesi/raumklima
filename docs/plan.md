@@ -1,7 +1,8 @@
 # raumklima - system plan
 
-Status 2026-11-26: the hub operates (see `hub/docs/plan.md`). The nodes, the radio protocol,
-the operation with more than one hub and KNX are not built at this time.
+Status 2026-11-26: the hub operates (see `hub/docs/plan.md`), with KNX send and listen (tested
+in the test network with unicast and multicast, see "KNX"). The nodes, the radio protocol and the operation with
+more than one hub are not built at this time.
 
 ## Why
 
@@ -18,11 +19,16 @@ Thomas, 2026-11-25 and 2026-11-26:
   not a goal.
 - Node SoC: nRF54L15. Water level sensor: TI TMAG5273 (I2C Hall sensor).
 - Quantity: 2 or 3 hubs, a maximum of 8 nodes.
-- Intervals: configurable from 30 s to 3600 s. The measurement interval is from 240 s to
-  3600 s. (Open: question 1.)
+- Measurement interval: indoor node 30 s to 3600 s, outdoor node 240 s to 3600 s. The radio
+  interval is the same as the measurement interval. After each packet, a node with a display
+  keeps its receiver on for some milliseconds. In this time the primary hub sends the time.
+- Display interval of the node: each second for a test of the power consumption, else each
+  minute.
 - Battery life: outdoor node 1 year with 2 x AA Li-FeS2. Indoor node: charge each 6 months
   (LiPo, USB-C).
-- Time on the node: the node shows the time only after a time sync with the hub. If a node
+- Time on the node: the node shows the time only after a time sync with the hub. Only the
+  primary hub sends the time, as a reply to the sensor data of the node. If more than one hub
+  replies, a node with a display shows a warning message. If a node
   with a pairing gets no data from the primary hub for 3600 s, it shows a notice. It
   continues to show the time for 24 h. After that, it shows only the sensor values.
 - Operation of a node without a pairing: optional.
@@ -36,14 +42,33 @@ Thomas, 2026-11-25 and 2026-11-26:
 - Chirp soil moisture sensor: I2C version. Cables: 3 m maximum. A maximum of 3 DS18B20 for
   each node. The nodes read the DS18B20 with 10 bit resolution: 187.5 ms for each
   conversion, not 750 ms at 12 bit (DS18B20 datasheet).
+- Radio: Bluetooth LE, no Thread, no Matter (Thomas, 2026-11-26).
 - KNX: the primary hub sends the sensor values as KNXnet/IP routing telegrams to the KNX
   multicast address. Format: DPT 9.x. Interval: from 240 s to 3600 s. All hubs listen to
   configured group addresses. See "KNX".
+  - Each value gets its own group address, set with a command (for example
+    `knx ga add 3/1/10 9.001 send bme690.temperature_c`).
+  - The primary hub sends its own values and the values of the other hubs and the nodes. It
+    does not send received KNX values again.
+  - The value is always the mean of the interval.
+  - Received values: only on the KNX page of the display. Not to Carbon, not as an input.
+  - The primary hub answers GroupValueRead for its send addresses.
+  - The filter table of the KNX IP router is off (small installation: all telegrams on the
+    two sides). The hub must not fill the 9600 bit/s TP line.
+- Roles (proposal, Thomas agreed): an explicit command `set role primary|secondary`, default
+  primary. Thus one hub operates without an adjustment. A secondary hub does not send to Carbon
+  or KNX. It does not answer KNX reads and does not send the time to the nodes.
+- knxToDbWriter (`../knxToDbWriter`, a different repository): a different agent does its test
+  suite and its update. This repository uses it only as a receiver for tests.
+- KNX addresses: individual addresses 1.2.30 to 1.2.39 for the hubs, one address for each
+  hub. Group addresses 8/0/10 to 8/0/99 for tests. The test network (FRITZ!Box,
+  192.168.178.0/24) has no KNX router and no knxToDbWriter.
+- Alarms, for example low battery and dew point: the node with a display shows its alarms.
+  All hubs show the alarms of all nodes.
 
-## Radio: Bluetooth LE (proposal 2026-11-25)
+## Radio: Bluetooth LE
 
-Proposal: Bluetooth LE, no Thread and no Matter. Thomas' answer about the range (no mesh,
-primary hub in a central location) agrees with it. Tell me if this is correct (question 2).
+Decision (Thomas, 2026-11-26): Bluetooth LE, no Thread and no Matter.
 
 Facts:
 
@@ -66,8 +91,12 @@ How it operates:
 - Uplink: the node sends advertising packets in the BTHome v2 layout, encrypted. Without Home
   Assistant, BTHome is only a documented layout with a known encryption. We do not make a new
   format.
-- Downlink (time, name, key, configuration): a small GATT service of our own. The hub connects to
-  the node for a short time, for example one time each day for the time.
+- Time: after each packet, a node with a display keeps its receiver on for some milliseconds.
+  The primary hub replies in this window with the time (ASSUMPTION: the ESP32-S3 replies in
+  sufficient time; measure it in step 5). BLE 5.4 PAwR is made for this, but the ESP32-S3 has
+  Bluetooth 5.0 only.
+- Other downlink data (name, key, configuration): a small GATT service of our own. The hub
+  connects to the node for a short time.
 - Range: the audio connection from Thomas' phone to the headphones stops after 3/4 of
   the hallway. Audio is Bluetooth Classic with a high data rate. Advertising packets are small, and
   the Coded PHY gives a better link budget (ASSUMPTION: test on the hardware). Each hub
@@ -115,28 +144,60 @@ Facts:
 
 - KNXnet/IP routing uses the multicast address 224.0.23.12 (VERIFIED:
   `knxToDbWriter/src/main/java/de/mieslinger/myknxreader/GroupMonitorMulticast.java`).
-  UDP port 3671 (ASSUMPTION: KNX standard, examine it with the calimero source).
-- DPT 9.x is a 2 byte floating point value. The subtype gives the unit: 9.001 temperature
-  in degrees C, 9.004 illuminance in lux, 9.006 pressure in Pa, 9.007 humidity in %, 9.008
-  air quality in ppm (ASSUMPTION: KNX standard, examine it with the calimero source).
+- Byte layouts (DPT 9, routing indication, search request, search response): VERIFIED with
+  calimero-core 2.6. `hub/components/knx/test/test_knx_proto.c` has the calimero values as
+  a host test (`hub/tools/test_host.sh`).
+- DPT 9 units (VERIFIED: calimero 2.6): 9.001 degrees C, 9.004 lx, 9.006 Pa, 9.007 %, 9.008
+  ppm. Maximum value 670433.28. The resolution decreases with the value: at 1000 hPa (100000
+  Pa) a step is 81.92 Pa, approximately 0.8 hPa.
+- TP1 line: approximately 23 ms for one DPT 9 telegram with ACK, a maximum of approximately
+  43 telegrams each second (ASSUMPTION: calculated from the TP1 timing, not measured).
 
-Proposal:
+How it operates (hub, 2026-11-26):
 
-- Send (primary hub only): at each KNX interval boundary (240 s to 3600 s, aligned to UTC),
-  the hub sends the mean of the interval for each configured group address. The hub sends
-  the telegrams with a small gap between them, so that a KNX IP router does not get too many
-  telegrams at the same time (ASSUMPTION: gap of 50 ms).
-- Listen (all hubs): the hub keeps the last value and the time of the last telegram for each
-  configured group address.
-- Console commands (proposal for the syntax):
-  - `knx address <area.line.device>`: set the individual address of the hub.
-  - `knx ga add <main/middle/sub> <dpt> send <metric> | listen [name]`
-  - `knx ga list`: all group addresses with DPT, direction, last value and the time of the
-    last telegram.
-  - `knx ga del <main/middle/sub>`
-  - `set interval knx <s>`
-- Test receiver: knxToDbWriter (Java, MariaDB), or a small Python listener in
-  `tools/receivers/` for automatic tests (question 6).
+- Send: at each boundary of the KNX interval (default 300 s) the primary hub sends one
+  GroupValueWrite for each send address. The gap between two telegrams is 200 ms or more.
+  Thus the hub sends a maximum of 5 telegrams each second, approximately 12 % of the TP1 line
+  during the burst. ROUTING_BUSY from a router stops the sending for the time that it asks for.
+- Listen: all hubs keep the last value, the source and the time of the last telegram.
+- Commands: `knx`, `knx on|off`, `knx address`, `knx search`, `knx monitor <s>`,
+  `knx ga add|list|del`, `set interval knx`, `set role`, `knx test-target <ip>|off`.
+- `knx test-target <ip>`: the hub sends all telegrams unicast to a test receiver, not to the
+  multicast group. Nothing goes to the KNX line. The setting is in RAM only.
+
+Test 2026-11-26 with `tools/receivers/knx_listen.py` and the test target (VERIFIED):
+
+- GroupValueRead to a send address: the hub replied with the value (before the first boundary
+  with the last reading). A telegram with the address of the hub as source: ignored.
+- At the boundary 18:56:00 UTC: 5 writes, 121 ms after the boundary, with gaps of 201, 202,
+  210 and 195 ms at the receiver. (Before a correction: up to 332 ms, because the task looked
+  at the queue only each 100 ms.)
+- A write to a listen address: `knx ga list` shows 3.50 degrees C, the source and the time.
+- A send address with a DPT that does not agree with the unit of the metric is refused.
+
+Test 2026-11-26 with multicast 224.0.23.12 in the test network, hub address 1.2.30, test
+group addresses 8/0/10, 8/0/11 and 8/0/20 (VERIFIED: hub console and
+`knx_listen.py --iface-ip 192.168.178.22` on the Mac):
+
+- Hub to Mac: the reply to a GroupValueRead (22.76 degrees C) and the boundary writes
+  (22.80 degrees C and 51.28 %, 205 ms gap) arrived at the Mac.
+- Mac to hub: a GroupValueRead and 10 of 10 writes (20.01 to 20.10, 1 s gap) arrived at the
+  hub. One write before this test did not arrive. 3 s after that write the hub recorded a
+  Wi-Fi beacon timeout. Later the FRITZ!Box changed from channel 11 to channel 6.
+- Wi-Fi does not send a multicast frame again if it does not arrive. KNXnet/IP routing also
+  does not send a telegram again (ASSUMPTION: from the 802.11 and KNXnet/IP specifications, not
+  measured over a long time). Thus one value can be missing. The next interval sends a new value.
+- The reply to the read arrived 1.8 s after the read (ASSUMPTION: the access point keeps
+  multicast frames for a station in power save until the next DTIM beacon).
+- On the Mac the route for 224.0.0.0/4 goes to the VPN (`utun4`). Thus `knx_listen.py` sets
+  `IP_MULTICAST_IF` from `--iface-ip`.
+- No KNX router answered `knx search`. This is correct: the test network has no KNX router.
+
+Open:
+
+- A test with the KNX router and knxToDbWriter in the network where they are installed.
+  Use only the test group addresses 8/0/10 to 8/0/99.
+- The KNX page on the display: built, not examined on the panel.
 
 ## Steps
 
@@ -144,8 +205,11 @@ Each step has a result that Thomas can see.
 
 1. Repository structure (complete 2026-11-26).
 2. Hub: HTTP endpoint for the core dump, safe mode screen (complete 2026-11-26).
-3. Hub: KNX send and listen, console commands, test with a receiver.
-4. Hub: roles, mDNS, warnings, data between the hubs.
+3. Hub: KNX send and listen, console commands, test with a receiver (complete 2026-11-26,
+   unicast and multicast in the test network. The test with the KNX router is open).
+4. Hub: roles, mDNS, warnings, data between the hubs. Each hub tells its KNX individual
+   address. If two hubs have the same address, all hubs show a warning: a hub ignores the
+   telegrams with its own address as source.
 5. Protocol v0 and a node on the nRF54L15 DK with an SHT4x only. The hub receives the values
    and shows them. Range test.
 6. Pairing, names, registry, `config dump` and `config restore`.
@@ -155,4 +219,16 @@ Each step has a result that Thomas can see.
 
 ## Open questions
 
-The open questions are in the chat of 2026-11-26. Their answers go into "Decisions".
+- Dew point alarm: which comparison. Proposal: the dew point of the air (SHT4x temperature
+  and humidity) against a surface temperature (a DS18B20 at the window or the wall). Alarm
+  when the surface temperature is less than the dew point plus a margin.
+- Alarm limits: where are they set. Proposal: in the registry on the primary hub, one set for
+  each node, with copies to the other hubs and to the node.
+- Alarm list: low battery and dew point. Are other alarms necessary (for example low water
+  level, dry soil, no data from a node)? Do the hubs also send alarms to syslog?
+- KNX: when and where is the test with the KNX router.
+- Hub time: after the first time sync after a boot, the clock was 4 s behind (see
+  `hub/docs/plan.md`). Correct this before step 7, because the nodes receive the time from the
+  primary hub.
+
+The open questions are also in the chat of 2026-11-26. Their answers go into "Decisions".

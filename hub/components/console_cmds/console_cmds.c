@@ -21,6 +21,9 @@
 #include "freertos/task.h"
 #include "health.h"
 #include "i2cbus.h"
+#include "knx.h"
+#include "knx_proto.h"
+#include "lwip/inet.h"
 #include "metrics.h"
 #include "netlog.h"
 #include "netmgr.h"
@@ -102,6 +105,36 @@ static void show_health(void)
         }
     }
     printf("  (last sign of life / limit)\n");
+}
+
+// TP1 line: 9600 bit/s. A DPT 9 write is 11 characters of 13 bit times plus 50 bit times
+// idle before it and the ACK (15 bit times + 1 character): about 23 ms on the line
+// (ASSUMPTION: calculated from the TP1 timing, not measured), at most ~43 telegrams/s.
+#define KNX_TP1_TELEGRAM_MS 23.0
+
+static void show_knx_status(void)
+{
+    knx_status_t k;
+    knx_get_status(&k);
+    char ia[16];
+    knx_ia_format(k.ia, ia, sizeof(ia));
+    if (!k.on) {
+        printf("knx        off\n");
+        return;
+    }
+    printf("knx        %s, address %s%s, interval %d s, %s%s%s\n", k.primary ? "primary (sends)" : "secondary (listens only)",
+           ia, k.ia == APPCFG_KNX_IA_DEFAULT ? " (default - set 'knx address')" : "", k.interval_s,
+           k.running ? "joined " KNX_MCAST : "not joined", k.error[0] ? ", last error: " : "", k.error);
+    printf("             bus: %lu telegrams in the last minute (about %.1f %% of a TP1 line), %lu received\n",
+           (unsigned long)k.rx_last_min, k.rx_last_min * KNX_TP1_TELEGRAM_MS / 600.0, (unsigned long)k.rx);
+    printf("             sent: %lu writes, %lu read responses, %lu dropped, %lu routing busy; gap %d ms (max %d/s)\n",
+           (unsigned long)k.tx_write, (unsigned long)k.tx_response, (unsigned long)k.tx_dropped, (unsigned long)k.busy,
+           KNX_TX_GAP_MS, 1000 / KNX_TX_GAP_MS);
+    uint32_t tt = knx_test_target();
+    if (tt) {
+        struct in_addr a = {.s_addr = tt};
+        printf("             TEST: telegrams go unicast to %s, not to the KNX line\n", inet_ntoa(a));
+    }
 }
 
 static void show_status(void)
@@ -206,7 +239,7 @@ static void show_status(void)
     carbon_status_t cs;
     carbon_get_status(&cs);
     if (!cs.enabled) {
-        printf("carbon     off\n");
+        printf("carbon     off%s\n", cs.secondary && c.carbon_host[0] ? " (secondary hub - only the primary sends)" : "");
     } else {
         printf("carbon     %s:%u%s, sent %lu batches / %lu lines, buffered %lu (%lu bytes), dropped %lu, errors %lu%s%s\n",
                c.carbon_host, c.carbon_port, cs.waiting_clock ? " (waiting for NTP)" : "", (unsigned long)cs.sent_batches,
@@ -224,6 +257,7 @@ static void show_status(void)
                (unsigned long)ls.sent, (unsigned long)ls.buffered, (unsigned long)ls.dropped, (unsigned long)ls.errors,
                ls.last_error[0] ? ", last: " : "", ls.last_error);
     }
+    show_knx_status();
     char warn[320];
     sensors_warnings(warn, sizeof(warn));
     if (warn[0]) {
@@ -269,6 +303,11 @@ static void show_config(void)
         printf("syslog     off\n");
     }
     printf("prefer     %s (carbon, syslog)\n", c.prefer_v4 ? "IPv4" : "IPv6");
+    char ia[16];
+    knx_ia_format(c.knx_ia, ia, sizeof(ia));
+    printf("role       %s\n", c.role == APPCFG_ROLE_PRIMARY ? "primary" : "secondary");
+    printf("knx        %s, address %s, interval %u s ('knx ga list': group addresses)\n", c.knx_on ? "on" : "off", ia,
+           c.knx_s);
     printf("%s\n", appcfg_dirty() ? "UNSAVED changes - 'save' to keep them" : "saved");
 }
 
@@ -360,6 +399,19 @@ static void interval_help(void)
 
 static int set_interval(int argc, char **argv)
 {
+    if (argc == 4 && strcmp(argv[2], "knx") == 0) {
+        int s = atoi(argv[3]);
+        if (s < APPCFG_KNX_INTERVAL_MIN || s > APPCFG_KNX_INTERVAL_MAX) {
+            printf("error: %d..%d s (each send address gets one telegram per interval)\n", APPCFG_KNX_INTERVAL_MIN,
+                   APPCFG_KNX_INTERVAL_MAX);
+            return 1;
+        }
+        if (report(appcfg_set_knx_interval(s), "set interval knx")) {
+            return 1;
+        }
+        knx_reschedule();
+        return 0;
+    }
     if (argc != 4 || (strcmp(argv[2], "display") != 0 && strcmp(argv[2], "carbon") != 0)) {
         interval_help();
         return argc == 2 ? 0 : 1;   // plain "set interval" asks for the explanation
@@ -446,6 +498,19 @@ static int cmd_set(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "interval") == 0) {
         return set_interval(argc, argv);
     }
+    if (argc == 3 && strcmp(argv[1], "role") == 0) {
+        int role = strcmp(argv[2], "primary") == 0     ? APPCFG_ROLE_PRIMARY
+                   : strcmp(argv[2], "secondary") == 0 ? APPCFG_ROLE_SECONDARY
+                                                       : -1;
+        if (report(appcfg_set_role(role), "set role primary|secondary")) {
+            return 1;
+        }
+        printf("%s\n", role == APPCFG_ROLE_PRIMARY ? "this hub sends to Carbon and KNX and answers KNX reads"
+                                                   : "this hub does not send to Carbon or KNX; it listens to KNX");
+        knx_reschedule();
+        carbon_reschedule();
+        return 0;
+    }
     if (argc >= 3 && strcmp(argv[1], "carbon") == 0) {
         esp_err_t err;
         if (strcmp(argv[2], "off") == 0) {
@@ -496,6 +561,8 @@ static int cmd_set(int argc, char **argv)
            "  set ntp dhcp                   back to DHCP option 42 / fallback\n"
            "  set co2 outdoor <ppm>          fresh-air target for the SCD41 (default 430)\n"
            "  set interval display|carbon <s>   %d..%d s, default %d ('set interval' explains)\n"
+           "  set interval knx <s>           240..3600 s, default 300\n"
+           "  set role primary|secondary     only the primary sends to Carbon and KNX\n"
            "  set carbon <host> [port] [prefix] Graphite plaintext, TCP, default port %d\n"
            "  set carbon off\n"
            "  set syslog <host> [port] [udp|tcp]  RFC 5424, default port %d udp\n"
@@ -861,6 +928,176 @@ static int cmd_crash(int argc, char **argv)
     return 0;
 }
 
+static int knx_usage(void)
+{
+    printf("knx                                   status\n"
+           "knx on|off                            listen/send (then 'save')\n"
+           "knx address <area.line.device>        individual address of the hub (then 'save')\n"
+           "knx search                            find KNXnet/IP routers (IP side only)\n"
+           "knx monitor <s>                       log received telegrams for <s> seconds\n"
+           "knx test-target <ipv4>|off            TEST: send unicast to a receiver, not to the line\n"
+           "knx ga add <m/m/s> <9.xxx> send <metric>   send the mean of each interval\n"
+           "knx ga add <m/m/s> <9.xxx> listen [name]   show received values on the KNX page\n"
+           "knx ga list                           group addresses, last telegram\n"
+           "knx ga del <m/m/s>\n"
+           "Group addresses are saved at once. The primary hub sends at each 'set interval knx'\n"
+           "boundary, one telegram each %d ms, and answers GroupValueRead for its send addresses.\n",
+           KNX_TX_GAP_MS);
+    return 1;
+}
+
+static void fmt_age(int64_t us_ago, char *buf, size_t len)
+{
+    int64_t s = us_ago / 1000000;
+    if (s < 120) {
+        snprintf(buf, len, "%llds ago", (long long)s);
+    } else if (s < 7200) {
+        snprintf(buf, len, "%lldmin ago", (long long)(s / 60));
+    } else {
+        snprintf(buf, len, "%lldh ago", (long long)(s / 3600));
+    }
+}
+
+static int knx_ga_cmd(int argc, char **argv)
+{
+    uint16_t ga;
+    if (argc == 3 && strcmp(argv[2], "list") == 0) {
+        static knx_ga_info_t g[KNX_GA_MAX];
+        int n = knx_ga_list(g, KNX_GA_MAX);
+        int64_t now = esp_timer_get_time();
+        int sends = 0;
+        printf("%-10s %-6s %-7s %-32s %-22s %s\n", "GA", "DPT", "dir", "metric / name", "value", "last telegram");
+        for (int i = 0; i < n; i++) {
+            char gs[16], val[32] = "-", last[64] = "never";
+            knx_ga_format(g[i].ga, gs, sizeof(gs));
+            if (g[i].dir == KNX_SEND && g[i].sent) {
+                snprintf(val, sizeof(val), "sent %.2f", g[i].sent_value);
+                sends++;
+            } else if (g[i].dir == KNX_SEND) {
+                sends++;
+            } else if (g[i].has_value) {
+                snprintf(val, sizeof(val), "%.2f %s", knx_display_value(g[i].dpt, g[i].value), knx_dpt_unit(g[i].dpt));
+            }
+            if (g[i].last_rx_us) {
+                char age[16], src[16];
+                fmt_age(now - g[i].last_rx_us, age, sizeof(age));
+                knx_ia_format(g[i].last_src, src, sizeof(src));
+                snprintf(last, sizeof(last), "%s from %s (%lu)", age, src, (unsigned long)g[i].telegrams);
+            }
+            printf("%-10s 9.%03u  %-7s %-32s %-22s %s\n", gs, g[i].dpt, g[i].dir == KNX_SEND ? "send" : "listen",
+                   g[i].name[0] ? g[i].name : "-", val, last);
+        }
+        if (!n) {
+            printf("(none)\n");
+        }
+        appcfg_t c;
+        appcfg_get(&c);
+        printf("%d send addresses: %d telegrams every %u s, %.1f s at %d ms gap\n", sends, sends, c.knx_s,
+               sends * KNX_TX_GAP_MS / 1000.0, KNX_TX_GAP_MS);
+        return 0;
+    }
+    if (argc == 4 && strcmp(argv[2], "del") == 0) {
+        if (!knx_ga_parse(argv[3], &ga)) {
+            printf("error: group address main/middle/sub, 0..31/0..7/0..255\n");
+            return 1;
+        }
+        esp_err_t err = knx_ga_del(ga);
+        printf("%s\n", err == ESP_OK ? "deleted" : "not found");
+        return err == ESP_OK ? 0 : 1;
+    }
+    if (argc >= 6 && strcmp(argv[2], "add") == 0) {
+        unsigned main_t, sub;
+        char end;
+        if (!knx_ga_parse(argv[3], &ga)) {
+            printf("error: group address main/middle/sub, 0..31/0..7/0..255\n");
+            return 1;
+        }
+        if (sscanf(argv[4], "%u.%u%c", &main_t, &sub, &end) != 2 || main_t != 9) {
+            printf("error: only DPT 9.xxx (2 byte float), e.g. 9.001\n");
+            return 1;
+        }
+        knx_dir_t dir;
+        if (strcmp(argv[5], "send") == 0 && argc == 7) {
+            dir = KNX_SEND;
+        } else if (strcmp(argv[5], "listen") == 0 && argc <= 7) {
+            dir = KNX_LISTEN;
+        } else {
+            return knx_usage();
+        }
+        char msg[120];
+        esp_err_t err = knx_ga_add(ga, (uint16_t)sub, dir, argc == 7 ? argv[6] : "", msg, sizeof(msg));
+        if (msg[0]) {
+            printf("%s%s\n", err == ESP_OK ? "" : "error: ", msg);
+        }
+        if (err == ESP_OK) {
+            printf("saved\n");
+        }
+        return err == ESP_OK ? 0 : 1;
+    }
+    return knx_usage();
+}
+
+static int cmd_knx(int argc, char **argv)
+{
+    if (argc == 1) {
+        show_knx_status();
+        return 0;
+    }
+    if (argc == 2 && (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "off") == 0)) {
+        appcfg_set_knx_on(strcmp(argv[1], "on") == 0);
+        knx_reschedule();
+        printf("ok - 'save' to keep it\n");
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "address") == 0) {
+        uint16_t ia;
+        if (!knx_ia_parse(argv[2], &ia)) {
+            printf("error: individual address area.line.device, 0..15.0..15.0..255\n");
+            return 1;
+        }
+        appcfg_set_knx_ia(ia);
+        knx_reschedule();
+        printf("ok - 'save' to keep it\n");
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "test-target") == 0) {
+        if (strcmp(argv[2], "off") == 0) {
+            knx_set_test_target(0);
+            printf("telegrams go to the multicast group again\n");
+            return 0;
+        }
+        struct in_addr a;
+        if (!inet_aton(argv[2], &a)) {
+            printf("error: IPv4 address or off\n");
+            return 1;
+        }
+        knx_set_test_target(a.s_addr);
+        printf("TEST: telegrams go unicast to %s, not to the KNX line (until 'off' or reboot)\n", argv[2]);
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "monitor") == 0) {
+        int s = atoi(argv[2]);
+        knx_monitor(s);
+        printf("%s\n", s > 0 ? "logging received telegrams (event=rx), 'knx monitor 0' stops" : "stopped");
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "search") == 0) {
+        knx_search_start();
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        char lines[4][128];
+        int n = knx_search_results(lines, 4);
+        for (int i = 0; i < n; i++) {
+            printf("%s\n", lines[i]);
+        }
+        printf("%d KNXnet/IP device(s) answered in 3 s\n", n);
+        return 0;
+    }
+    if (argc >= 2 && strcmp(argv[1], "ga") == 0) {
+        return knx_ga_cmd(argc, argv);
+    }
+    return knx_usage();
+}
+
 static int cmd_version(int argc, char **argv)
 {
     const esp_app_desc_t *app = esp_app_get_description();
@@ -904,6 +1141,7 @@ esp_err_t console_cmds_start(void)
         {.command = "sensor", .help = "sensor [name]: driver details (as on the display page)", .func = cmd_sensor_show},
         {.command = "scd41", .help = "scd41 status|diag|single|log|reinit|sleep-cycle|asc|offset|frc|fresh-air|factory-reset", .func = cmd_scd41},
         {.command = "version", .help = "firmware version", .func = cmd_version},
+        {.command = "knx", .help = "knx [on|off|address|search|ga add|ga list|ga del]: KNXnet/IP routing", .func = cmd_knx},
         {.command = "coredump", .help = "coredump [erase]: core dump summary / erase after fetching", .func = cmd_coredump},
         {.command = "crash", .help = "crash panic|fault|spin|irqoff|stall (TEST)", .func = cmd_crash},
         {.command = "log", .help = "log on|off", .func = cmd_log},

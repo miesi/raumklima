@@ -80,6 +80,7 @@ hub/
     netlog/                   # syslog client (RFC 5424), PSRAM ring
     health/                   # supervisor, crash history, safe mode, core dump report
     coredumpd/                # HTTP port 80 with the core dump, only while there is one
+    knx/                      # KNXnet/IP routing: send (primary), listen, DPT 9; host test
     epd/                      # e-paper driver (SSD1683 x 2)
     ui/                       # LVGL pages, fonts
     console_cmds/             # esp_console commands
@@ -231,6 +232,14 @@ has two controllers).
 - Server names from the console live in static storage: lwIP keeps only the pointer and
   resolves the name on every request.
 - The UI shows "not synced" until the first sync; no fake 1970 time on screen.
+- Found 2026-11-26 (VERIFIED: KNX boundary writes at the Mac 4.2 s after the boundary, Mac
+  clock +0.6 ms against ntp.1und1.de): after the first sync after a boot the clock was
+  approximately 4 s behind. The second sync (after a Wi-Fi reconnect) recorded
+  `offset_ms=4029.5`. ESP-IDF 6.1.1 lwIP has `SNTP_COMP_ROUNDTRIP 0` and
+  `SNTP_CHECK_RESPONSE 0` (VERIFIED: `lwip/src/include/lwip/apps/sntp_opts.h`, no override
+  in the ESP port). Thus lwIP sets the transmit time of the server without a correction for
+  the time on the network. It also accepts a reply to an earlier request. ASSUMPTION: a reply
+  that arrived 4 s after its request caused the error.
 
 ### Derived values
 
@@ -417,10 +426,28 @@ Test 2026-11-26 on the CrowPanel (VERIFIED):
 - Found: `font_dejavu_bold_72` has digits only (`tools/mkfont.py`, `DIGITS_ONLY`); the title
   uses `font_dejavu_bold_32`.
 
+### KNX (2026-11-26)
+
+Design, facts and test results: `../../docs/plan.md`, section "KNX". In the hub:
+- `knx_proto.c`: DPT 9, frames, search - plain C, host test with calimero values.
+- `knx.c`: group address table in NVS (namespace `knx`, saved at once), a task with one UDP
+  socket (multicast join, also unicast), send queue with 200 ms gap, a new metrics window
+  `METRICS_WIN_KNX`, answers to GroupValueRead (primary only), counters for Carbon
+  (`hub.knx_*`).
+- Found: the first boundary logic planned the boundary again in each pass from "now" and
+  never fired (80 ms after a boundary, the next one is already the following boundary). Now
+  the task plans a boundary once and waits for it.
+- Test 2026-11-26 with unicast (`knx test-target`) and with multicast in the test network
+  (no KNX router there): read, reply, boundary writes, listen values. Results:
+  `../../docs/plan.md`, section "KNX". This hub has the address 1.2.30.
+
 ### Next hub tasks
 
-- KNX (send on the primary hub, listen on all hubs), roles, receiver for nodes: see
-  `../../docs/plan.md`.
+- Time sync: set `SNTP_CHECK_RESPONSE=2` and `SNTP_COMP_ROUNDTRIP=1` for the lwIP component
+  (the two are `#if !defined` in `sntp_opts.h`). Record the server of each sync. Then examine
+  the offset of the first sync after a boot. This is necessary before the nodes receive the
+  time from the hub (`../../docs/plan.md`, step 7).
+- Roles between hubs, mDNS, receiver for nodes: see `../../docs/plan.md`.
 
 ### Later, in this structure
 

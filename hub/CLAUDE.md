@@ -22,6 +22,21 @@ Board facts with sources: `docs/hardware-crowpanel-579.md`. System plan (nodes, 
   for a boot log, `-c "show status"` to run console commands.
 - Never burn eFuses (`espefuse burn_*`). `espefuse summary` is fine.
 - Flashing changes the device the user works with; say before you flash.
+- Opening the serial port can reset the CH340 board. Put a test with more than one step into
+  one `serial_run.py` session (`-c "@sleep 60"` waits inside it).
+- Host tests (plain C parts, no ESP-IDF): `tools/test_host.sh`.
+- KNX addresses from Thomas: individual addresses 1.2.30 to 1.2.39 for the hubs (this hub:
+  1.2.30), group addresses 8/0/10 to 8/0/99 for tests. Use no other group address.
+- KNX in the test network (FRITZ!Box, 192.168.178.0/24): there is no KNX router. Multicast
+  tests with the test group addresses are permitted. Receiver on the Mac:
+  `../tools/receivers/knx_listen.py --iface-ip <mac ip>` (the multicast route of the Mac goes
+  to the VPN).
+- KNX in a network with the router: its filters are off, so every telegram from the hub
+  reaches the real KNX line. For tests, use `knx test-target <mac ip>` (unicast, RAM only), or
+  multicast to the test group addresses only.
+- Before a test with send addresses: `knx off` + `save`, then the test, then `knx on`
+  without `save` - a reset in the test then leaves KNX off. Delete the test group addresses
+  after the test.
 
 ## ESP-IDF v6 rules
 
@@ -72,6 +87,9 @@ Board facts with sources: `docs/hardware-crowpanel-579.md`. System plan (nodes, 
 - Big buffers (> some KB) static in PSRAM with `EXT_RAM_BSS_ATTR`, not `heap_caps_malloc`:
   the core dump copies every used heap block, PSRAM ones too, and would not fit.
 - Timestamps sent off-device are UTC; TZ is for display only.
+- Role: only the primary hub (`appcfg.role`) sends to Carbon and KNX and answers KNX reads.
+- KNX byte layouts only from `components/knx/knx_proto.c`; it is plain C and checked against
+  calimero-core 2.6 values in `components/knx/test/`.
 
 ## Third-party code
 

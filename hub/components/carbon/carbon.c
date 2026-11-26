@@ -15,6 +15,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "health.h"
+#include "knx.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "metrics.h"
@@ -73,7 +74,8 @@ void carbon_get_status(carbon_status_t *out)
     xSemaphoreGive(s_lock);
     appcfg_t c;
     appcfg_get(&c);
-    out->enabled = c.carbon_host[0] != '\0';
+    out->secondary = c.role != APPCFG_ROLE_PRIMARY;   // only the primary hub sends
+    out->enabled = c.carbon_host[0] != '\0' && !out->secondary;
     out->waiting_clock = out->enabled && !sched_clock_valid();
 }
 
@@ -84,6 +86,13 @@ static void publish_self(void)
     metrics_publish_state("hub.uptime_s", esp_timer_get_time() / 1000000);
     metrics_publish_state("hub.reset_reason", esp_reset_reason());
     metrics_publish("hub.heap_free_bytes", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    knx_status_t ks;
+    knx_get_status(&ks);
+    metrics_publish_state("hub.knx_rx", ks.rx);
+    metrics_publish_state("hub.knx_tx", ks.tx_write + ks.tx_response);
+    metrics_publish_state("hub.knx_dropped", ks.tx_dropped);
+    metrics_publish_state("hub.knx_busy", ks.busy);
+    metrics_publish("hub.knx_bus_telegrams_per_min", ks.rx_last_min);
     metrics_publish_state("hub.heap_min_free_bytes", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     metrics_publish("hub.psram_free_bytes", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     netmgr_status_t ns;
@@ -272,7 +281,8 @@ static bool send_batch(int sock, const batch_hdr_t *h, const char *lines, uint32
 
 static void flush(const appcfg_t *c)
 {
-    if (!c->carbon_host[0] || !sched_clock_valid() || s_len == 0 || esp_timer_get_time() < s_retry_at) {
+    if (!c->carbon_host[0] || c->role != APPCFG_ROLE_PRIMARY || !sched_clock_valid() || s_len == 0 ||
+        esp_timer_get_time() < s_retry_at) {
         return;
     }
     struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM};
@@ -425,7 +435,7 @@ static void carbon_task(void *arg)
             // boundary: a partial interval with one reading too many - not sent.
             bool first = !s_first_window_done;
             s_first_window_done = true;
-            if (c.carbon_host[0] && !first) {
+            if (c.carbon_host[0] && c.role == APPCFG_ROLE_PRIMARY && !first) {
                 buffer_batch(nc, &c);
             }
         }

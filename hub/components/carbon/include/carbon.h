@@ -26,7 +26,8 @@ esp_err_t carbon_start(void);
 void carbon_reschedule(void);
 
 typedef struct {
-    bool enabled;              // host configured
+    bool enabled;              // host configured and primary hub
+    bool secondary;            // role secondary: Carbon is off on this hub
     bool waiting_clock;
     uint32_t buffered_batches;
     uint32_t buffered_bytes;

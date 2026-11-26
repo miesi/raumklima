@@ -35,6 +35,8 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "health.h"
+#include "knx.h"
+#include "knx_proto.h"
 #include "lvgl.h"
 #include "metrics.h"
 #include "netmgr.h"
@@ -72,10 +74,24 @@ static uint32_t s_co2_faults_seen;
 // order: overview, network, time, one page per sensor, system (last)
 enum { PAGE_OVERVIEW, PAGE_NETWORK, PAGE_TIME, PAGE_SYSTEM, PAGE_FIXED_COUNT };
 
+// The KNX page exists while at least one "listen" group address is configured.
+static bool knx_page(void)
+{
+    static knx_ga_info_t g[KNX_GA_MAX];
+    int n = knx_ga_list(g, KNX_GA_MAX);
+    for (int i = 0; i < n; i++) {
+        if (g[i].dir == KNX_LISTEN) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Order: overview, network, time, sensors..., [KNX], system
 static int page_count(void)
 {
     sensor_info_t si[SENSORS_MAX];
-    return PAGE_FIXED_COUNT + sensors_list(si, SENSORS_MAX);
+    return PAGE_FIXED_COUNT + sensors_list(si, SENSORS_MAX) + (knx_page() ? 1 : 0);
 }
 
 // --- LVGL objects ---
@@ -546,6 +562,49 @@ static void page_system(char *c0, size_t l0, char *c1, size_t l1)
     }
 }
 
+// KNX page: received values of the "listen" group addresses (not sent anywhere else).
+static void page_knx(char *c0, size_t l0, char *c1, size_t l1)
+{
+    set_text(s_title, "KNX");
+    static knx_ga_info_t g[KNX_GA_MAX];
+    int n = knx_ga_list(g, KNX_GA_MAX);
+    int64_t now = esp_timer_get_time();
+    int shown = 0;
+    for (int i = 0; i < n; i++) {
+        if (g[i].dir != KNX_LISTEN) {
+            continue;
+        }
+        char *c = shown < 9 ? c0 : c1;   // 9 lines in a column
+        size_t l = shown < 9 ? l0 : l1;
+        char name[24], val[24] = "--";
+        if (g[i].name[0]) {
+            strlcpy(name, g[i].name, sizeof(name));
+        } else {
+            knx_ga_format(g[i].ga, name, sizeof(name));
+        }
+        if (g[i].has_value) {
+            snprintf(val, sizeof(val), "%.1f %s", knx_display_value(g[i].dpt, g[i].value), knx_dpt_unit(g[i].dpt));
+        }
+        char age[16] = "";
+        if (g[i].last_rx_us) {
+            long long m = (now - g[i].last_rx_us) / 60000000;
+            if (m < 1) {
+                strlcpy(age, "<1 min", sizeof(age));
+            } else if (m < 120) {
+                snprintf(age, sizeof(age), "%lld min", m);
+            } else {
+                snprintf(age, sizeof(age), "%lld h", m / 60);
+            }
+        }
+        snprintf(c + strlen(c), l - strlen(c), "%-14.14s %10s  %s\n", name, val, age);
+        shown++;
+    }
+    knx_status_t k;
+    knx_get_status(&k);
+    snprintf(c1 + strlen(c1), l1 - strlen(c1), "%sBus      %lu telegrams/min\n%s", c1[0] ? "\n" : "",
+             (unsigned long)k.rx_last_min, k.running ? "" : "KNX      not joined\n");
+}
+
 static void update_overlay(void);
 
 static void update_page(void)
@@ -573,6 +632,8 @@ static void update_page(void)
         page_time(c0, sizeof(c0), c1, sizeof(c1));
     } else if (s_page == count - 1) {
         page_system(c0, sizeof(c0), c1, sizeof(c1));
+    } else if (s_page == count - 2 && knx_page()) {
+        page_knx(c0, sizeof(c0), c1, sizeof(c1));
     } else {
         page_sensor(s_page - PAGE_TIME - 1, c0, sizeof(c0), c1, sizeof(c1));
     }

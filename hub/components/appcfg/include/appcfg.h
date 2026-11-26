@@ -17,6 +17,13 @@ extern "C" {
 #define APPCFG_CARBON_PORT 2003     // Graphite plaintext protocol
 #define APPCFG_CARBON_PREFIX "raumklima"
 #define APPCFG_SYSLOG_PORT 514
+#define APPCFG_KNX_INTERVAL_MIN 240 // s, KNX send interval (Thomas: low load on the 9600 bit/s TP line)
+#define APPCFG_KNX_INTERVAL_MAX 3600
+#define APPCFG_KNX_INTERVAL_DEFAULT 300
+#define APPCFG_KNX_IA_DEFAULT 0xFFFA // 15.15.250; set the real one with "knx address"
+// role: only the primary hub sends to Carbon and KNX and answers KNX reads
+#define APPCFG_ROLE_PRIMARY 0
+#define APPCFG_ROLE_SECONDARY 1
 
 // syslog severities (RFC 5424) used as the level threshold
 #define APPCFG_SEV_ERROR 3
@@ -40,6 +47,10 @@ typedef struct {
     uint16_t syslog_port;
     bool syslog_tcp;            // false = UDP (RFC 5426), true = TCP (RFC 6587 octet counting)
     uint8_t syslog_level;       // APPCFG_SEV_*: send this severity and more severe ones
+    uint8_t role;               // APPCFG_ROLE_*
+    bool knx_on;                // KNXnet/IP routing: listen (all hubs), send (primary only)
+    uint16_t knx_ia;            // individual address, source of the telegrams
+    uint16_t knx_s;             // KNX send interval
 } appcfg_t;
 
 // Initialises NVS and loads settings. Call once, early.
@@ -60,6 +71,10 @@ esp_err_t appcfg_set_carbon(const char *host, int port, const char *prefix);
 void appcfg_set_prefer_v4(bool v4);
 esp_err_t appcfg_set_syslog(const char *host, int port, bool tcp);
 esp_err_t appcfg_set_syslog_level(int severity);
+esp_err_t appcfg_set_role(int role);
+void appcfg_set_knx_on(bool on);
+void appcfg_set_knx_ia(uint16_t ia);
+esp_err_t appcfg_set_knx_interval(int s);   // APPCFG_KNX_INTERVAL_MIN..MAX
 
 bool appcfg_dirty(void);
 esp_err_t appcfg_save(void);

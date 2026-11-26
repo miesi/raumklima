@@ -2,7 +2,7 @@
 // monitoring. Consumers: UI, console, Carbon.
 // Key: "<instance>.<quantity>_<unit>", e.g. "bme680.temperature_c".
 //
-// Windows: every reading of a gauge also goes into one open window per consumer (display,
+// Windows: every reading of a gauge also goes into one open window per consumer (display, KNX,
 // Carbon). The consumer closes its window at its interval boundary; the closed window holds
 // count, mean, min and max of the readings since the previous boundary. State values (an
 // accuracy, a status, a setting) are not averaged - the consumer uses the last value.
@@ -24,6 +24,7 @@ extern "C" {
 typedef enum {
     METRICS_WIN_DISPLAY = 0,
     METRICS_WIN_CARBON,
+    METRICS_WIN_KNX,
     METRICS_WIN_COUNT,
 } metrics_win_id_t;
 

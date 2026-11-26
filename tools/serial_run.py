@@ -5,6 +5,9 @@ Reads the console for a fixed time, optionally resets the board first and sends
 console commands. Run with the ESP-IDF python env (needs pyserial).
 
   serial_run.py [-p PORT] [--reset] [-t SECONDS] [-c "show status" -c ...]
+
+"-c '@sleep 60'" waits 60 s inside the session (reads the console meanwhile). Opening the
+port can reset the CH340 board, so a test with several steps runs in one session.
 """
 import argparse
 import sys
@@ -47,6 +50,9 @@ def main():
 
     for c in a.cmd * a.repeat:
         pump(a.cmd_delay)
+        if c.startswith("@sleep "):   # pause inside one session: no new port open, no reset
+            pump(float(c.split()[1]))
+            continue
         s.write((c + "\r\n").encode())
     pump(a.time)
     s.close()

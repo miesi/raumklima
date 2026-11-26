@@ -12,6 +12,7 @@
 #include "esp_system.h"
 #include "health.h"
 #include "i2cbus.h"
+#include "knx.h"
 #include "metrics.h"
 #include "netlog.h"
 #include "netmgr.h"
@@ -44,6 +45,7 @@ void app_main(void)
     netlog_start();                     // syslog sender
     carbon_start();                     // Carbon sender and self monitoring
     coredumpd_start();                  // HTTP port 80, only while a core dump is in flash
+    knx_start();                        // KNXnet/IP routing: listen; send on the primary hub
 
     if (epd_init() != ESP_OK) {
         ESP_LOGE(TAG, "event=epd_init_failed display=none");

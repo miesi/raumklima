@@ -175,6 +175,32 @@ Buffers are RAM only (PSRAM, lost on reboot - no flash wear): Carbon 2 MB, about
 the defaults; syslog 512 lines. Syslog over UDP cannot buffer: a send to a host that is down
 does not fail, the line is gone. Use TCP if lines must survive a receiver outage.
 
+## KNX
+
+The hub talks KNXnet/IP routing (multicast 224.0.23.12, UDP 3671) with DPT 9 values.
+
+- Role: `set role primary|secondary` (default primary). Only the primary hub sends to KNX
+  (and Carbon) and answers GroupValueRead. All hubs listen.
+- Send: `knx ga add <m/m/s> <9.xxx> send <metric>`, e.g.
+  `knx ga add 3/1/10 9.001 send bme690.temperature_c`. At each KNX interval boundary
+  (`set interval knx <240..3600 s>`, default 300) the hub sends the mean of the interval. The
+  DPT must fit the unit of the metric (`_c` 9.001, `_pct` 9.007, `_ppm` 9.008, `_lx` 9.004,
+  `_hpa` 9.006 - sent in Pa). The telegrams leave one at a time with at least 200 ms between
+  them (at most 5/s), so a burst uses about 12 % of a 9600 bit/s TP line.
+- Listen: `knx ga add <m/m/s> <9.xxx> listen [name]`. The KNX page of the display shows the
+  values. They go nowhere else (not to Carbon, not to KNX).
+- `knx ga list`: all group addresses with the value and the last telegram (age, source).
+  `knx ga del <m/m/s>`. Group addresses are saved at once.
+- `knx address <a.l.d>` (default 15.15.250), `knx on|off` (then `save`). The hubs use the
+  addresses 1.2.30 to 1.2.39, one address for each hub. This hub: 1.2.30.
+- Diagnostics: `knx` (status, bus telegrams per minute, sent, dropped, ROUTING_BUSY),
+  `knx search` (finds KNXnet/IP routers, IP side only), `knx monitor <s>` (logs received
+  telegrams).
+- Tests without the KNX line: `knx test-target <ip>` sends all telegrams unicast to a test
+  receiver (RAM only), `../tools/receivers/knx_listen.py` receives and sends test telegrams
+  (`--to <hub>` for unicast, `--iface-ip <local ip>` for multicast). Test group addresses:
+  8/0/10 to 8/0/99 only.
+
 ## Crashes and hangs
 
 - Watchdogs: interrupt watchdog (800 ms), task watchdog (10 s, idle tasks), both with panic and

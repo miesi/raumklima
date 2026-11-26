@@ -12,8 +12,11 @@ for its code: `hub/CLAUDE.md` (ESP-IDF). `node/` and `protocol/` come after the 
 | `protocol/` | (planned) radio protocol between node and hub: description, C header, test vectors |
 | `docs/plan.md` | system plan: nodes, radio, more than one hub, KNX |
 | `hub/docs/plan.md` | hub plan and test results |
-| `tools/receivers/` | local test receivers on the Mac (go-carbon, rsyslogd) |
+| `tools/receivers/` | local test receivers on the Mac (go-carbon, rsyslogd, `knx_listen.py`) |
 | `tools/serial_run.py` | serial console helper for agents (`idf.py monitor` is interactive) |
+
+`../knxToDbWriter` is a different repository. A different agent works on it (test suite,
+update). Here it is only a receiver for tests; do not change it from this repository.
 
 The repository is public: github.com/miesi/raumklima. Everything that you commit must be
 fit for publication: no secrets, no code without a license that lets you publish it.

@@ -60,6 +60,10 @@ esp_err_t appcfg_init(void)
     strlcpy(s_cfg.carbon_prefix, APPCFG_CARBON_PREFIX, sizeof(s_cfg.carbon_prefix));
     s_cfg.syslog_port = APPCFG_SYSLOG_PORT;
     s_cfg.syslog_level = APPCFG_SEV_INFO;
+    s_cfg.role = APPCFG_ROLE_PRIMARY;   // one hub: it sends; a second one is set to secondary
+    s_cfg.knx_on = true;                // without group addresses it only listens
+    s_cfg.knx_ia = APPCFG_KNX_IA_DEFAULT;
+    s_cfg.knx_s = APPCFG_KNX_INTERVAL_DEFAULT;
 
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
@@ -83,6 +87,12 @@ esp_err_t appcfg_init(void)
             s_cfg.syslog_tcp = u8;
         }
         nvs_get_u8(h, "s_level", &s_cfg.syslog_level);
+        nvs_get_u8(h, "role", &s_cfg.role);
+        if (nvs_get_u8(h, "knx_on", &u8) == ESP_OK) {
+            s_cfg.knx_on = u8;
+        }
+        nvs_get_u16(h, "knx_ia", &s_cfg.knx_ia);
+        nvs_get_u16(h, "knx_s", &s_cfg.knx_s);
         load_str(h, "ssid", ssid, sizeof(ssid));
         if (ssid[0]) {
             strlcpy(s_cfg.wifi_ssid, ssid, sizeof(s_cfg.wifi_ssid));
@@ -97,6 +107,12 @@ esp_err_t appcfg_init(void)
     }
     if (s_cfg.carbon_s < APPCFG_INTERVAL_MIN || s_cfg.carbon_s > APPCFG_INTERVAL_MAX) {
         s_cfg.carbon_s = APPCFG_INTERVAL_DEFAULT;
+    }
+    if (s_cfg.knx_s < APPCFG_KNX_INTERVAL_MIN || s_cfg.knx_s > APPCFG_KNX_INTERVAL_MAX) {
+        s_cfg.knx_s = APPCFG_KNX_INTERVAL_DEFAULT;
+    }
+    if (s_cfg.role > APPCFG_ROLE_SECONDARY) {
+        s_cfg.role = APPCFG_ROLE_PRIMARY;
     }
     ESP_LOGI(TAG, "event=loaded hostname=%s ssid=\"%s\" wifi_source=%s tz=%s ntp=\"%s%s%s\" display_s=%u carbon_s=%u",
              s_cfg.hostname, s_cfg.wifi_ssid, s_wifi_from_build ? "wlan.config" : "nvs", s_cfg.tz,
@@ -252,6 +268,46 @@ esp_err_t appcfg_set_carbon(const char *host, int port, const char *prefix)
     return ESP_OK;
 }
 
+esp_err_t appcfg_set_role(int role)
+{
+    if (role != APPCFG_ROLE_PRIMARY && role != APPCFG_ROLE_SECONDARY) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_cfg.role = (uint8_t)role;
+    s_dirty = true;
+    xSemaphoreGive(s_lock);
+    return ESP_OK;
+}
+
+void appcfg_set_knx_on(bool on)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_cfg.knx_on = on;
+    s_dirty = true;
+    xSemaphoreGive(s_lock);
+}
+
+void appcfg_set_knx_ia(uint16_t ia)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_cfg.knx_ia = ia;
+    s_dirty = true;
+    xSemaphoreGive(s_lock);
+}
+
+esp_err_t appcfg_set_knx_interval(int s)
+{
+    if (s < APPCFG_KNX_INTERVAL_MIN || s > APPCFG_KNX_INTERVAL_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_cfg.knx_s = (uint16_t)s;
+    s_dirty = true;
+    xSemaphoreGive(s_lock);
+    return ESP_OK;
+}
+
 void appcfg_set_prefer_v4(bool v4)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -323,6 +379,10 @@ esp_err_t appcfg_save(void)
     nvs_set_u16(h, "s_port", c.syslog_port);
     nvs_set_u8(h, "s_tcp", c.syslog_tcp);
     nvs_set_u8(h, "s_level", c.syslog_level);
+    nvs_set_u8(h, "role", c.role);
+    nvs_set_u8(h, "knx_on", c.knx_on);
+    nvs_set_u16(h, "knx_ia", c.knx_ia);
+    nvs_set_u16(h, "knx_s", c.knx_s);
     if (!s_wifi_from_build) {
         nvs_set_str(h, "ssid", c.wifi_ssid);
         nvs_set_str(h, "psk", c.wifi_psk);
